@@ -1,0 +1,33 @@
+name: Build Standalone
+
+on:
+  workflow_dispatch:
+    inputs:
+      recipe:
+        description: "Path to recipe.json (e.g. recipes/pffp/recipe.json)"
+        required: true
+      platform:
+        description: "Target platform"
+        required: true
+        default: "mac"
+        type: choice
+        options:
+          - mac
+          - windows
+
+jobs:
+  build:
+    runs-on: ${{ inputs.platform == 'mac' && 'macos-latest' || 'windows-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Validate recipe
+        run: python scripts/validate_recipe.py ${{ inputs.recipe }}
+
+      - name: Build standalone
+        run: python scripts/build_standalone.py ${{ inputs.recipe }} --platform ${{ inputs.platform }}
