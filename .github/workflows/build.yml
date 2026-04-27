@@ -1,33 +1,424 @@
-name: Build Standalone
+name: Build and Release
 
 on:
   workflow_dispatch:
     inputs:
-      recipe:
+      recipe_path:
         description: "Path to recipe.json (e.g. recipes/pffp/recipe.json)"
-        required: true
-      platform:
-        description: "Target platform"
-        required: true
-        default: "mac"
-        type: choice
-        options:
-          - mac
-          - windows
+        required: false
+        default: "recipes/pffp/recipe.json"
+  push:
+    tags:
+      - "v*"
 
+# ---------------------------------------------------------------------------
+# VALIDATE
+# ---------------------------------------------------------------------------
 jobs:
-  build:
-    runs-on: ${{ inputs.platform == 'mac' && 'macos-latest' || 'windows-latest' }}
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: "3.11"
 
-      - name: Validate recipe
-        run: python scripts/validate_recipe.py ${{ inputs.recipe }}
+      - name: Install dependencies
+        run: pip install requests
 
-      - name: Build standalone
-        run: python scripts/build_standalone.py ${{ inputs.recipe }} --platform ${{ inputs.platform }}
+      - name: Validate recipe (fail fast)
+        run: python3 scripts/validate_recipe.py "$RECIPE_PATH"
+
+  # ---------------------------------------------------------------------------
+  # BUILD — macOS Apple Silicon (macos-14)
+  # ---------------------------------------------------------------------------
+  build-macos-arm:
+    runs-on: macos-14
+    needs: validate
+    env:
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
+      MATIKA_REPO: https://github.com/pjtallman/Matika
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install build dependencies
+        run: pip install pyinstaller dmgbuild requests
+
+      - name: Read recipe metadata
+        id: recipe_info
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          name    = r["application"]["name"]
+          slug    = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+          version = r["application"]["version"]
+          matika_v = r["matika"]["version"]
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a") as f:
+              f.write(f"app_name={name}\n")
+              f.write(f"app_slug={slug}\n")
+              f.write(f"app_version={version}\n")
+              f.write(f"matika_version={matika_v}\n")
+          print(f"App      : {name} v{version}")
+          print(f"Slug     : {slug}")
+          print(f"Matika   : {matika_v}")
+          PYEOF
+
+      - name: Clone Matika at declared version
+        shell: bash
+        run: |
+          MATIKA_TAG="v${{ steps.recipe_info.outputs.matika_version }}"
+          echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
+          git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
+
+      - name: Clone AppLugs into build/matika/plugins/
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          for plug in r["applugs"]:
+              repo = plug["repo"]
+              if not repo.startswith("http"):
+                  repo = "https://" + repo
+              tag  = plug["tag"]
+              name = plug["name"]
+              dest = f"build/matika/plugins/{name}"
+              print(f"Cloning {name} @ {tag} from {repo} -> {dest}")
+              subprocess.run(
+                  ["git", "clone", "--depth", "1", "--branch", tag, repo, dest],
+                  check=True,
+              )
+          PYEOF
+
+      - name: Build frontend (npm)
+        shell: bash
+        working-directory: build/matika
+        run: |
+          npm install
+          npm run build
+
+      - name: TODO — run PyInstaller
+        shell: bash
+        run: |
+          echo "TODO: pyinstaller not yet implemented — will produce dist/Matika.app here"
+          # Placeholder artifact so upload step does not fail during stub phase
+          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg"
+
+      - name: TODO — run dmgbuild
+        shell: bash
+        run: |
+          echo "TODO: dmgbuild not yet implemented — will wrap dist/Matika.app into a signed DMG here"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg
+          path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg
+
+  # ---------------------------------------------------------------------------
+  # BUILD — macOS Intel (macos-13)
+  # ---------------------------------------------------------------------------
+  build-macos-intel:
+    runs-on: macos-13
+    needs: validate
+    env:
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
+      MATIKA_REPO: https://github.com/pjtallman/Matika
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install build dependencies
+        run: pip install pyinstaller dmgbuild requests
+
+      - name: Read recipe metadata
+        id: recipe_info
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          name    = r["application"]["name"]
+          slug    = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+          version = r["application"]["version"]
+          matika_v = r["matika"]["version"]
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a") as f:
+              f.write(f"app_name={name}\n")
+              f.write(f"app_slug={slug}\n")
+              f.write(f"app_version={version}\n")
+              f.write(f"matika_version={matika_v}\n")
+          print(f"App      : {name} v{version}")
+          print(f"Slug     : {slug}")
+          print(f"Matika   : {matika_v}")
+          PYEOF
+
+      - name: Clone Matika at declared version
+        shell: bash
+        run: |
+          MATIKA_TAG="v${{ steps.recipe_info.outputs.matika_version }}"
+          echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
+          git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
+
+      - name: Clone AppLugs into build/matika/plugins/
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          for plug in r["applugs"]:
+              repo = plug["repo"]
+              if not repo.startswith("http"):
+                  repo = "https://" + repo
+              tag  = plug["tag"]
+              name = plug["name"]
+              dest = f"build/matika/plugins/{name}"
+              print(f"Cloning {name} @ {tag} from {repo} -> {dest}")
+              subprocess.run(
+                  ["git", "clone", "--depth", "1", "--branch", tag, repo, dest],
+                  check=True,
+              )
+          PYEOF
+
+      - name: Build frontend (npm)
+        shell: bash
+        working-directory: build/matika
+        run: |
+          npm install
+          npm run build
+
+      - name: TODO — run PyInstaller
+        shell: bash
+        run: |
+          echo "TODO: pyinstaller not yet implemented — will produce dist/Matika.app here"
+          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-x86_64.dmg"
+
+      - name: TODO — run dmgbuild
+        shell: bash
+        run: |
+          echo "TODO: dmgbuild not yet implemented — will wrap dist/Matika.app into a signed DMG here"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-x86_64.dmg
+          path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-x86_64.dmg
+
+  # ---------------------------------------------------------------------------
+  # BUILD — Windows x86_64
+  # ---------------------------------------------------------------------------
+  build-windows:
+    runs-on: windows-latest
+    needs: validate
+    env:
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
+      MATIKA_REPO: https://github.com/pjtallman/Matika
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install build dependencies
+        run: pip install pyinstaller requests
+
+      - name: Read recipe metadata
+        id: recipe_info
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          name    = r["application"]["name"]
+          slug    = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+          version = r["application"]["version"]
+          matika_v = r["matika"]["version"]
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a") as f:
+              f.write(f"app_name={name}\n")
+              f.write(f"app_slug={slug}\n")
+              f.write(f"app_version={version}\n")
+              f.write(f"matika_version={matika_v}\n")
+          print(f"App      : {name} v{version}")
+          print(f"Slug     : {slug}")
+          print(f"Matika   : {matika_v}")
+          PYEOF
+
+      - name: Clone Matika at declared version
+        shell: bash
+        run: |
+          MATIKA_TAG="v${{ steps.recipe_info.outputs.matika_version }}"
+          echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
+          git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
+
+      - name: Clone AppLugs into build/matika/plugins/
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          for plug in r["applugs"]:
+              repo = plug["repo"]
+              if not repo.startswith("http"):
+                  repo = "https://" + repo
+              tag  = plug["tag"]
+              name = plug["name"]
+              dest = f"build/matika/plugins/{name}"
+              print(f"Cloning {name} @ {tag} from {repo} -> {dest}")
+              subprocess.run(
+                  ["git", "clone", "--depth", "1", "--branch", tag, repo, dest],
+                  check=True,
+              )
+          PYEOF
+
+      - name: Build frontend (npm)
+        shell: bash
+        working-directory: build/matika
+        run: |
+          npm install
+          npm run build
+
+      - name: TODO — run PyInstaller
+        shell: bash
+        run: |
+          echo "TODO: pyinstaller not yet implemented — will produce dist/Matika.exe here"
+          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe"
+
+      - name: TODO — run Inno Setup
+        shell: bash
+        run: |
+          echo "TODO: Inno Setup not yet implemented — will wrap dist/Matika.exe into a Windows installer here"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe
+          path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe
+
+  # ---------------------------------------------------------------------------
+  # RELEASE — tag push only
+  # ---------------------------------------------------------------------------
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-macos-arm, build-macos-intel, build-windows]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    env:
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Read recipe metadata
+        id: recipe_info
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          name    = r["application"]["name"]
+          slug    = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+          version = r["application"]["version"]
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a") as f:
+              f.write(f"app_name={name}\n")
+              f.write(f"app_slug={slug}\n")
+              f.write(f"app_version={version}\n")
+          PYEOF
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded artifacts
+        run: find artifacts -type f | sort
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          name     = r["application"]["name"]
+          version  = r["application"]["version"]
+          matika_v = r["matika"]["version"]
+          lines = [
+              f"## {name} v{version}",
+              "",
+              f"Built with [Matika](https://github.com/pjtallman/Matika) {matika_v}.",
+              "",
+              "**AppLugs included:**",
+          ]
+          for plug in r["applugs"]:
+              lines.append(
+                  f"- **{plug['name']}** v{plug['version']} "
+                  f"(matika_version: {plug['matika_version']})"
+              )
+          with open("release_notes.md", "w") as f:
+              f.write("\n".join(lines) + "\n")
+          print("Release notes:")
+          print("\n".join(lines))
+          PYEOF
+
+      - name: Create GitHub release
+        shell: bash
+        run: |
+          APP_NAME="${{ steps.recipe_info.outputs.app_name }}"
+          APP_VERSION="${{ steps.recipe_info.outputs.app_version }}"
+          ARTIFACTS=$(find artifacts -type f | sort | tr '\n' ' ')
+
+          gh release create "${{ github.ref_name }}" \
+            --title "${APP_NAME} v${APP_VERSION}" \
+            --notes-file release_notes.md \
+            $ARTIFACTS
