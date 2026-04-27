@@ -41,7 +41,6 @@ jobs:
     needs: validate
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
-      MATIKA_REPO: https://github.com/pjtallman/Matika
 
     steps:
       - uses: actions/checkout@v4
@@ -66,24 +65,30 @@ jobs:
           path = os.environ["RECIPE_PATH"]
           with open(path) as f:
               r = json.load(f)
-          name    = r["application"]["name"]
-          slug    = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-          version = r["application"]["version"]
-          matika_v = r["matika"]["version"]
+          name        = r["application"]["name"]
+          slug        = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+          version     = r["application"]["version"]
+          matika_v    = r["matika"]["version"]
+          matika_repo = r["matika"]["repo"]
+          if not matika_repo.startswith("http"):
+              matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
           with open(out, "a") as f:
               f.write(f"app_name={name}\n")
               f.write(f"app_slug={slug}\n")
               f.write(f"app_version={version}\n")
               f.write(f"matika_version={matika_v}\n")
+              f.write(f"matika_repo={matika_repo}\n")
           print(f"App      : {name} v{version}")
           print(f"Slug     : {slug}")
           print(f"Matika   : {matika_v}")
+          print(f"Repo     : {matika_repo}")
           PYEOF
 
       - name: Clone Matika at declared version
         shell: bash
         run: |
+          MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
           MATIKA_TAG="v${{ steps.recipe_info.outputs.matika_version }}"
           echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
           git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
@@ -143,7 +148,6 @@ jobs:
     needs: validate
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
-      MATIKA_REPO: https://github.com/pjtallman/Matika
 
     steps:
       - uses: actions/checkout@v4
@@ -168,24 +172,30 @@ jobs:
           path = os.environ["RECIPE_PATH"]
           with open(path) as f:
               r = json.load(f)
-          name    = r["application"]["name"]
-          slug    = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-          version = r["application"]["version"]
-          matika_v = r["matika"]["version"]
+          name        = r["application"]["name"]
+          slug        = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+          version     = r["application"]["version"]
+          matika_v    = r["matika"]["version"]
+          matika_repo = r["matika"]["repo"]
+          if not matika_repo.startswith("http"):
+              matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
           with open(out, "a") as f:
               f.write(f"app_name={name}\n")
               f.write(f"app_slug={slug}\n")
               f.write(f"app_version={version}\n")
               f.write(f"matika_version={matika_v}\n")
+              f.write(f"matika_repo={matika_repo}\n")
           print(f"App      : {name} v{version}")
           print(f"Slug     : {slug}")
           print(f"Matika   : {matika_v}")
+          print(f"Repo     : {matika_repo}")
           PYEOF
 
       - name: Clone Matika at declared version
         shell: bash
         run: |
+          MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
           MATIKA_TAG="v${{ steps.recipe_info.outputs.matika_version }}"
           echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
           git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
@@ -244,7 +254,6 @@ jobs:
     needs: validate
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
-      MATIKA_REPO: https://github.com/pjtallman/Matika
 
     steps:
       - uses: actions/checkout@v4
@@ -269,24 +278,30 @@ jobs:
           path = os.environ["RECIPE_PATH"]
           with open(path) as f:
               r = json.load(f)
-          name    = r["application"]["name"]
-          slug    = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-          version = r["application"]["version"]
-          matika_v = r["matika"]["version"]
+          name        = r["application"]["name"]
+          slug        = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+          version     = r["application"]["version"]
+          matika_v    = r["matika"]["version"]
+          matika_repo = r["matika"]["repo"]
+          if not matika_repo.startswith("http"):
+              matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
           with open(out, "a") as f:
               f.write(f"app_name={name}\n")
               f.write(f"app_slug={slug}\n")
               f.write(f"app_version={version}\n")
               f.write(f"matika_version={matika_v}\n")
+              f.write(f"matika_repo={matika_repo}\n")
           print(f"App      : {name} v{version}")
           print(f"Slug     : {slug}")
           print(f"Matika   : {matika_v}")
+          print(f"Repo     : {matika_repo}")
           PYEOF
 
       - name: Clone Matika at declared version
         shell: bash
         run: |
+          MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
           MATIKA_TAG="v${{ steps.recipe_info.outputs.matika_version }}"
           echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
           git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika

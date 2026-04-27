@@ -42,7 +42,7 @@ VALID_RECIPE = {
         "bundle_id": "com.example.test",
         "icon": "assets/icon.icns",
     },
-    "matika": {"version": "0.0.2"},
+    "matika": {"version": "0.0.2", "repo": "github.com/pjtallman/matika"},
     "applugs": [
         {
             "name": "eyerate",
@@ -141,7 +141,7 @@ def test_missing_application_field_fails(tmp_path, missing_field, expected_label
 
 
 def test_missing_matika_version_fails(tmp_path):
-    recipe = {**VALID_RECIPE, "matika": {}}
+    recipe = {**VALID_RECIPE, "matika": {"repo": "github.com/pjtallman/matika"}}
     path = write_recipe(tmp_path, recipe)
 
     with patch("validate_recipe._fetch_json", return_value=REMOTE_APPLUG_JSON):
@@ -150,6 +150,19 @@ def test_missing_matika_version_fails(tmp_path):
     failure_msgs = failed(results)
     assert any("matika.version" in m for m in failure_msgs), (
         f"Expected failure mentioning 'matika.version', got: {failure_msgs}"
+    )
+
+
+def test_missing_matika_repo_fails(tmp_path):
+    recipe = {**VALID_RECIPE, "matika": {"version": "0.0.2"}}
+    path = write_recipe(tmp_path, recipe)
+
+    with patch("validate_recipe._fetch_json", return_value=REMOTE_APPLUG_JSON):
+        results = validate(path)
+
+    failure_msgs = failed(results)
+    assert any("matika.repo" in m for m in failure_msgs), (
+        f"Expected failure mentioning 'matika.repo', got: {failure_msgs}"
     )
 
 

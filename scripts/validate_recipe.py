@@ -3,7 +3,7 @@ validate_recipe.py — validates a recipe.json against ahimsa rules.
 
 Rules enforced:
   1. Schema check — required fields present: application.name,
-     application.version, matika.version, applugs (non-empty array).
+     application.version, matika.version, matika.repo, applugs (non-empty array).
   2. Each applug entry must have: name, repo, version, matika_version, tag.
   3. All applugs must declare identical matika_version values.
   4. Every applug matika_version must match recipe.matika.version.
@@ -144,6 +144,7 @@ def validate(path: str, registry=None) -> list[CheckResult]:
         ("application.name",    app.get("name")),
         ("application.version", app.get("version")),
         ("matika.version",      matika.get("version")),
+        ("matika.repo",         matika.get("repo")),
     ]:
         if value:
             ok("schema", f"{field} present ({value!r})")

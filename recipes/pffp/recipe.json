@@ -6,7 +6,8 @@
     "icon": "assets/icon.icns"
   },
   "matika": {
-    "version": "0.0.2"
+    "version": "0.0.2",
+    "repo": "github.com/pjtallman/matika"
   },
   "applugs": [
     {
