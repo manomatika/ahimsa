@@ -1,21 +1,22 @@
 {
   "application": {
     "name": "Pats Fantastic Finance Pro",
-    "version": "1.0.0",
+    "version": "0.0.4",
     "bundle_id": "com.pjtallman.pffp",
     "icon": "assets/icon.icns"
   },
   "matika": {
-    "version": "0.0.2",
-    "repo": "github.com/pjtallman/matika"
+    "version": "0.0.4",
+    "tag": "v0.0.4",
+    "repo": "github.com/pjtallman/Matika"
   },
   "applugs": [
     {
       "name": "eyerate",
-      "repo": "github.com/pjtallman/eyerate",
-      "version": "0.0.2",
-      "matika_version": "0.0.2",
-      "tag": "v0.0.2"
+      "repo": "github.com/pjtallman/EyeRate",
+      "version": "0.0.4",
+      "matika_version": "0.0.4",
+      "tag": "v0.0.4"
     }
   ]
 }
