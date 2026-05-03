@@ -58,8 +58,8 @@ minor.
 ```json
 {
   "id": "eyerate",
-  "version": "0.0.2",
-  "matika_version": "0.0.2",
+  "version": "0.0.4",
+  "matika_version": "0.0.4",
   "name": "EyeRate",
   "description": "Real-time eye strain scoring for extended work sessions.",
   "author": "Patrick Tallman",
