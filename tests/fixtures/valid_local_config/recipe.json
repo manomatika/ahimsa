@@ -1,0 +1,22 @@
+{
+  "application": {
+    "name": "Invocation Test App",
+    "version": "0.0.1",
+    "bundle_id": "com.test.invocation",
+    "icon": "icon.icns"
+  },
+  "matika": {
+    "version": "0.0.1",
+    "repo": "test.invalid/org/matika",
+    "tag": "v0.0.1"
+  },
+  "applugs": [
+    {
+      "name": "testplug",
+      "repo": "test.invalid/org/testplug",
+      "version": "0.0.1",
+      "matika_version": "0.0.1",
+      "tag": "v0.0.1"
+    }
+  ]
+}
