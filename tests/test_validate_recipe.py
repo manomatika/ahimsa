@@ -1,22 +1,18 @@
 """
-Tests for scripts/validate_recipe.py and scripts/_config.py.
+Tests for ahimsa.validate_recipe and ahimsa._config.
 
 All remote fetches are intercepted by injecting mock BaseResolver subclasses
 into validate(). GitHubResolver-internal tests patch requests.get directly.
+Config and walk-up tests live in test_config_precedence.py.
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-import _config
-from _config import load_allowed_hosts
-from validate_recipe import (
+import ahimsa._config as _config_module
+from ahimsa.validate_recipe import (
     AppLugManifest,
     BaseResolver,
     Error,
@@ -101,17 +97,14 @@ def ok_resolvers(manifest: AppLugManifest = VALID_MANIFEST) -> dict[str, BaseRes
     return {"github.com": _OkResolver(manifest)}
 
 
-def errors_for(recipe: dict, tmp_path, **kw) -> list[Error]:
+def _validate(recipe: dict, tmp_path, **kw) -> list[Error]:
+    """Helper: write recipe to tmp_path and validate with injected resolvers."""
     path = write_recipe(tmp_path, recipe)
     return validate(path, resolvers=ok_resolvers(), **kw)
 
 
 def pointers(errors: list[Error]) -> list[str]:
     return [e.pointer for e in errors]
-
-
-def messages(errors: list[Error]) -> list[str]:
-    return [e.message for e in errors]
 
 
 # ---------------------------------------------------------------------------
@@ -148,9 +141,8 @@ def test_valid_recipe_passes(tmp_path):
 ])
 def test_missing_application_field(tmp_path, field, pointer):
     app = {k: v for k, v in VALID_RECIPE["application"].items() if k != field}
-    recipe = {**VALID_RECIPE, "application": app}
-    errors = errors_for(recipe, tmp_path)
-    assert pointer in pointers(errors), f"Expected error at {pointer}, got: {pointers(errors)}"
+    errors = _validate({**VALID_RECIPE, "application": app}, tmp_path)
+    assert pointer in pointers(errors)
     err = next(e for e in errors if e.pointer == pointer)
     assert "required field missing" in err.message
 
@@ -166,9 +158,8 @@ def test_missing_application_field(tmp_path, field, pointer):
 ])
 def test_missing_matika_field(tmp_path, field, pointer):
     matika = {k: v for k, v in VALID_RECIPE["matika"].items() if k != field}
-    recipe = {**VALID_RECIPE, "matika": matika}
-    errors = errors_for(recipe, tmp_path)
-    assert pointer in pointers(errors), f"Expected error at {pointer}, got: {pointers(errors)}"
+    errors = _validate({**VALID_RECIPE, "matika": matika}, tmp_path)
+    assert pointer in pointers(errors)
     err = next(e for e in errors if e.pointer == pointer)
     assert "required field missing" in err.message
 
@@ -185,8 +176,7 @@ def test_missing_applugs_field(tmp_path):
 
 
 def test_empty_applugs_array(tmp_path):
-    recipe = {**VALID_RECIPE, "applugs": []}
-    path = write_recipe(tmp_path, recipe)
+    path = write_recipe(tmp_path, {**VALID_RECIPE, "applugs": []})
     errors = validate(path, resolvers=ok_resolvers())
     assert "applugs" in pointers(errors)
 
@@ -207,16 +197,13 @@ def test_empty_applugs_array(tmp_path):
 ])
 def test_invalid_application_version(tmp_path, bad_version):
     recipe = {**VALID_RECIPE, "application": {**VALID_RECIPE["application"], "version": bad_version}}
-    errors = errors_for(recipe, tmp_path)
-    assert "application.version" in pointers(errors), (
-        f"Expected version error for {bad_version!r}, got: {pointers(errors)}"
-    )
+    errors = _validate(recipe, tmp_path)
+    assert "application.version" in pointers(errors)
 
 
 def test_dev_suffix_in_applug_version_rejected(tmp_path):
     plug = {**VALID_RECIPE["applugs"][0], "version": "0.0.4_dev"}
-    recipe = {**VALID_RECIPE, "applugs": [plug]}
-    errors = errors_for(recipe, tmp_path)
+    errors = _validate({**VALID_RECIPE, "applugs": [plug]}, tmp_path)
     assert "applugs[0].version" in pointers(errors)
 
 
@@ -227,7 +214,7 @@ def test_dev_suffix_in_applug_matika_version_rejected(tmp_path):
         "matika": {**VALID_RECIPE["matika"], "version": "0.0.4_dev"},
         "applugs": [plug],
     }
-    errors = errors_for(recipe, tmp_path)
+    errors = _validate(recipe, tmp_path)
     assert "applugs[0].matika_version" in pointers(errors)
 
 
@@ -242,10 +229,8 @@ def test_dev_suffix_in_applug_matika_version_rejected(tmp_path):
 ])
 def test_invalid_bundle_id(tmp_path, bad_id, reason):
     recipe = {**VALID_RECIPE, "application": {**VALID_RECIPE["application"], "bundle_id": bad_id}}
-    errors = errors_for(recipe, tmp_path)
-    assert "application.bundle_id" in pointers(errors), (
-        f"Expected bundle_id error for {bad_id!r} ({reason}), got: {pointers(errors)}"
-    )
+    errors = _validate(recipe, tmp_path)
+    assert "application.bundle_id" in pointers(errors)
     err = next(e for e in errors if e.pointer == "application.bundle_id")
     assert "reverse-DNS" in err.message
 
@@ -257,8 +242,7 @@ def test_invalid_bundle_id(tmp_path, bad_id, reason):
 @pytest.mark.parametrize("field", ["name", "repo", "version", "matika_version", "tag"])
 def test_missing_applug_field(tmp_path, field):
     plug = {k: v for k, v in VALID_RECIPE["applugs"][0].items() if k != field}
-    recipe = {**VALID_RECIPE, "applugs": [plug]}
-    path = write_recipe(tmp_path, recipe)
+    path = write_recipe(tmp_path, {**VALID_RECIPE, "applugs": [plug]})
     errors = validate(path, resolvers=ok_resolvers())
     assert f"applugs[0].{field}" in pointers(errors)
     err = next(e for e in errors if e.pointer == f"applugs[0].{field}")
@@ -282,20 +266,10 @@ def test_conflicting_matika_versions_fails(tmp_path):
     recipe = {
         **VALID_RECIPE,
         "applugs": [
-            {
-                "name": "eyerate",
-                "repo": "github.com/pjtallman/EyeRate",
-                "version": "0.0.2",
-                "matika_version": "0.0.2",
-                "tag": "v0.0.2",
-            },
-            {
-                "name": "other",
-                "repo": "github.com/pjtallman/Other",
-                "version": "1.0.0",
-                "matika_version": "0.0.1",
-                "tag": "v1.0.0",
-            },
+            {"name": "eyerate", "repo": "github.com/pjtallman/EyeRate",
+             "version": "0.0.2", "matika_version": "0.0.2", "tag": "v0.0.2"},
+            {"name": "other", "repo": "github.com/pjtallman/Other",
+             "version": "1.0.0", "matika_version": "0.0.1", "tag": "v1.0.0"},
         ],
     }
     path = write_recipe(tmp_path, recipe)
@@ -314,26 +288,15 @@ def test_identical_matika_versions_passes(tmp_path):
     recipe = {
         **VALID_RECIPE,
         "applugs": [
-            {
-                "name": "eyerate",
-                "repo": "github.com/pjtallman/EyeRate",
-                "version": "0.0.2",
-                "matika_version": "0.0.2",
-                "tag": "v0.0.2",
-            },
-            {
-                "name": "other",
-                "repo": "github.com/pjtallman/Other",
-                "version": "0.0.2",
-                "matika_version": "0.0.2",
-                "tag": "v0.0.2",
-            },
+            {"name": "eyerate", "repo": "github.com/pjtallman/EyeRate",
+             "version": "0.0.2", "matika_version": "0.0.2", "tag": "v0.0.2"},
+            {"name": "other", "repo": "github.com/pjtallman/Other",
+             "version": "0.0.2", "matika_version": "0.0.2", "tag": "v0.0.2"},
         ],
     }
     path = write_recipe(tmp_path, recipe)
     errors = validate(path, resolvers={"github.com": _MultiResolver()})
-    consistency_errors = [e for e in errors if "conflicting" in str(e)]
-    assert consistency_errors == []
+    assert not any("conflicting" in str(e) for e in errors)
 
 
 # ---------------------------------------------------------------------------
@@ -348,8 +311,7 @@ def test_applug_matika_version_mismatch_with_recipe(tmp_path):
     errors = validate(path, resolvers={"github.com": resolver})
     assert "applugs[0].matika_version" in pointers(errors)
     err = next(e for e in errors if e.pointer == "applugs[0].matika_version")
-    assert '"0.0.1"' in err.message
-    assert '"0.0.2"' in err.message
+    assert '"0.0.1"' in err.message and '"0.0.2"' in err.message
 
 
 # ---------------------------------------------------------------------------
@@ -359,12 +321,11 @@ def test_applug_matika_version_mismatch_with_recipe(tmp_path):
 def test_valid_manifest_passes(tmp_path):
     path = write_recipe(tmp_path, VALID_RECIPE)
     errors = validate(path, resolvers=ok_resolvers(VALID_MANIFEST))
-    resolve_errors = [e for e in errors if "resolve" in e.pointer]
-    assert resolve_errors == []
+    assert not any("resolve" in e.pointer for e in errors)
 
 
 # ---------------------------------------------------------------------------
-# Remote verification: 404 on applug.json
+# Remote verification: error paths
 # ---------------------------------------------------------------------------
 
 def test_applug_json_not_found_fails(tmp_path):
@@ -377,10 +338,6 @@ def test_applug_json_not_found_fails(tmp_path):
     err = next(e for e in errors if "resolve" in e.pointer)
     assert "not found" in err.message
 
-
-# ---------------------------------------------------------------------------
-# Remote verification: 404 on repo (canonicalization)
-# ---------------------------------------------------------------------------
 
 def test_repo_not_found_fails(tmp_path):
     path = write_recipe(tmp_path, VALID_RECIPE)
@@ -395,18 +352,13 @@ def test_repo_not_found_fails(tmp_path):
     assert "not found" in err.message
 
 
-# ---------------------------------------------------------------------------
-# Remote verification: field mismatches
-# ---------------------------------------------------------------------------
-
 def test_applug_json_id_mismatch_fails(tmp_path):
     wrong = AppLugManifest(id="wrong-id", version="0.0.2", matika_version="0.0.2")
     path = write_recipe(tmp_path, VALID_RECIPE)
     errors = validate(path, resolvers=ok_resolvers(wrong))
     assert any("resolve" in e.pointer for e in errors)
     err = next(e for e in errors if "resolve" in e.pointer)
-    assert '"wrong-id"' in err.message
-    assert '"eyerate"' in err.message
+    assert '"wrong-id"' in err.message and '"eyerate"' in err.message
 
 
 def test_applug_json_version_mismatch_fails(tmp_path):
@@ -458,8 +410,7 @@ def test_parse_repo_wrong_host_rejected():
 
 def test_parse_repo_valid_passes():
     owner, repo = GitHubResolver()._parse_repo("github.com/pjtallman/Matika")
-    assert owner == "pjtallman"
-    assert repo == "Matika"
+    assert owner == "pjtallman" and repo == "Matika"
 
 
 # ---------------------------------------------------------------------------
@@ -467,14 +418,12 @@ def test_parse_repo_valid_passes():
 # ---------------------------------------------------------------------------
 
 def test_dispatch_github_routes_to_github_resolver():
-    res = resolver_for("github.com/owner/repo", allowed_hosts=["github.com"])
-    assert isinstance(res, GitHubResolver)
+    assert isinstance(resolver_for("github.com/owner/repo", allowed_hosts=["github.com"]), GitHubResolver)
 
 
 def test_dispatch_host_not_allowed(tmp_path):
     plug = {**VALID_RECIPE["applugs"][0], "repo": "evil.com/owner/plugin"}
-    recipe = {**VALID_RECIPE, "applugs": [plug]}
-    path = write_recipe(tmp_path, recipe)
+    path = write_recipe(tmp_path, {**VALID_RECIPE, "applugs": [plug]})
     errors = validate(path, allowed_hosts=["github.com"])
     assert any("repo" in e.pointer for e in errors)
     err = next(e for e in errors if "repo" in e.pointer)
@@ -483,47 +432,11 @@ def test_dispatch_host_not_allowed(tmp_path):
 
 def test_dispatch_allowed_but_no_resolver(tmp_path):
     plug = {**VALID_RECIPE["applugs"][0], "repo": "fakehub.com/owner/plugin"}
-    recipe = {**VALID_RECIPE, "applugs": [plug]}
-    path = write_recipe(tmp_path, recipe)
+    path = write_recipe(tmp_path, {**VALID_RECIPE, "applugs": [plug]})
     errors = validate(path, allowed_hosts=["fakehub.com"])
     assert any("repo" in e.pointer for e in errors)
     err = next(e for e in errors if "repo" in e.pointer)
     assert "allowed but no resolver" in err.message
-
-
-# ---------------------------------------------------------------------------
-# Config: load_allowed_hosts()
-# ---------------------------------------------------------------------------
-
-def test_config_file_present_and_valid(tmp_path, monkeypatch):
-    cfg = tmp_path / "config.json"
-    cfg.write_text('{"allowed_hosts": ["github.com", "gitlab.com"]}')
-    monkeypatch.setattr(_config, "_CONFIG_FILE", cfg)
-    monkeypatch.delenv("AHIMSA_ALLOWED_HOSTS", raising=False)
-    assert load_allowed_hosts() == ["github.com", "gitlab.com"]
-
-
-def test_config_file_missing_returns_default(tmp_path, monkeypatch):
-    monkeypatch.setattr(_config, "_CONFIG_FILE", tmp_path / "missing.json")
-    monkeypatch.delenv("AHIMSA_ALLOWED_HOSTS", raising=False)
-    assert load_allowed_hosts() == ["github.com"]
-
-
-def test_config_file_malformed_raises(tmp_path, monkeypatch):
-    cfg = tmp_path / "config.json"
-    cfg.write_text("{not valid json")
-    monkeypatch.setattr(_config, "_CONFIG_FILE", cfg)
-    monkeypatch.delenv("AHIMSA_ALLOWED_HOSTS", raising=False)
-    with pytest.raises(ValueError, match="malformed JSON"):
-        load_allowed_hosts()
-
-
-def test_config_env_var_overrides_file(tmp_path, monkeypatch):
-    cfg = tmp_path / "config.json"
-    cfg.write_text('{"allowed_hosts": ["github.com"]}')
-    monkeypatch.setattr(_config, "_CONFIG_FILE", cfg)
-    monkeypatch.setenv("AHIMSA_ALLOWED_HOSTS", "gitlab.com, bitbucket.org")
-    assert load_allowed_hosts() == ["gitlab.com", "bitbucket.org"]
 
 
 # ---------------------------------------------------------------------------
@@ -539,36 +452,28 @@ def _make_mock_response(json_data: dict, status: int = 200) -> MagicMock:
 
 
 def test_github_resolver_lowercase_repo_canonicalized():
-    """Lowercase repo string resolves to canonical casing in the raw URL."""
-    import validate_recipe as vr
+    import ahimsa.validate_recipe as vr
     vr._repo_cache.clear()
 
     resolver = GitHubResolver()
     api_resp = _make_mock_response({"full_name": "pjtallman/EyeRate"})
     raw_resp = _make_mock_response({"id": "eyerate", "version": "0.0.2", "matika_version": "0.0.2"})
-
     captured_urls: list[str] = []
 
     def fake_get(url, **kwargs):
         captured_urls.append(url)
-        if "api.github.com" in url:
-            return api_resp
-        return raw_resp
+        return api_resp if "api.github.com" in url else raw_resp
 
     with patch("requests.get", side_effect=fake_get):
         manifest = resolver.resolve("eyerate", "github.com/pjtallman/eyerate", "v0.0.2")
 
     raw_urls = [u for u in captured_urls if "raw.githubusercontent.com" in u]
-    assert raw_urls, "Expected a raw.githubusercontent.com fetch"
-    assert "EyeRate" in raw_urls[0], (
-        f"Expected canonical casing 'EyeRate' in URL, got: {raw_urls[0]}"
-    )
+    assert raw_urls and "EyeRate" in raw_urls[0]
     assert manifest.id == "eyerate"
 
 
 def test_github_resolver_cache_one_api_call():
-    """Two resolve() calls for the same repo hit the GitHub API exactly once."""
-    import validate_recipe as vr
+    import ahimsa.validate_recipe as vr
     vr._repo_cache.clear()
 
     resolver = GitHubResolver()
@@ -576,26 +481,18 @@ def test_github_resolver_cache_one_api_call():
     raw_resp = _make_mock_response({"id": "eyerate", "version": "0.0.2", "matika_version": "0.0.2"})
 
     def fake_get(url, **kwargs):
-        if "api.github.com" in url:
-            return api_resp
-        return raw_resp
+        return api_resp if "api.github.com" in url else raw_resp
 
     with patch("requests.get", side_effect=fake_get) as mock_get:
         resolver.resolve("eyerate", "github.com/pjtallman/EyeRate", "v0.0.2")
         resolver.resolve("eyerate", "github.com/pjtallman/EyeRate", "v0.0.3")
 
-    api_calls = [
-        c for c in mock_get.call_args_list
-        if "api.github.com" in c.args[0]
-    ]
-    assert len(api_calls) == 1, (
-        f"Expected 1 GitHub API call, got {len(api_calls)}"
-    )
+    api_calls = [c for c in mock_get.call_args_list if "api.github.com" in c.args[0]]
+    assert len(api_calls) == 1
 
 
 def test_github_resolver_cache_case_insensitive():
-    """Cache treats same repo in different casing as one entry."""
-    import validate_recipe as vr
+    import ahimsa.validate_recipe as vr
     vr._repo_cache.clear()
 
     resolver = GitHubResolver()
@@ -603,18 +500,11 @@ def test_github_resolver_cache_case_insensitive():
     raw_resp = _make_mock_response({"id": "eyerate", "version": "0.0.2", "matika_version": "0.0.2"})
 
     def fake_get(url, **kwargs):
-        if "api.github.com" in url:
-            return api_resp
-        return raw_resp
+        return api_resp if "api.github.com" in url else raw_resp
 
     with patch("requests.get", side_effect=fake_get) as mock_get:
         resolver.resolve("eyerate", "github.com/pjtallman/eyerate", "v0.0.2")
         resolver.resolve("eyerate", "github.com/PJTALLMAN/EYERATE", "v0.0.3")
 
-    api_calls = [
-        c for c in mock_get.call_args_list
-        if "api.github.com" in c.args[0]
-    ]
-    assert len(api_calls) == 1, (
-        f"Different casings of same repo should share one cache entry; got {len(api_calls)} API calls"
-    )
+    api_calls = [c for c in mock_get.call_args_list if "api.github.com" in c.args[0]]
+    assert len(api_calls) == 1

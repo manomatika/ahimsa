@@ -2,11 +2,13 @@
 validate_recipe.py — validates a recipe.json against ahimsa rules.
 
 Usage:
-  python3 scripts/validate_recipe.py recipes/pffp/recipe.json
+  ahimsa-validate recipes/pffp/recipe.json
+  python3 -m ahimsa.validate_recipe recipes/pffp/recipe.json
 
 Exit codes:
   0 — all checks passed
-  1 — one or more errors (all printed before exit)
+  1 — one or more validation errors (all printed before exit)
+  2 — configuration error (bad --config path or malformed config JSON)
 """
 
 import json
@@ -18,7 +20,7 @@ from pathlib import Path
 
 import requests
 
-from _config import load_allowed_hosts
+from ahimsa._config import find_config, load_allowed_hosts
 
 
 # ---------------------------------------------------------------------------
@@ -179,16 +181,22 @@ def _check_bundle_id(errors: list[Error], value: str, pointer: str) -> None:
 def validate(
     recipe_path: Path,
     *,
+    config_path: Path | None = None,
     resolvers: dict[str, BaseResolver] | None = None,
     allowed_hosts: list[str] | None = None,
 ) -> list[Error]:
     """Validate a recipe.json. Returns a (possibly empty) list of errors.
 
-    resolvers: host -> resolver instance map, injected by tests to avoid network.
-    allowed_hosts: overrides load_allowed_hosts(); defaults to config/env.
+    config_path: explicit config file; None triggers walk-up from recipe_path.
+    resolvers:   host -> resolver instance map, injected by tests to avoid network.
+    allowed_hosts: direct override, bypasses both config_path and walk-up.
+
+    Raises ValueError  if the resolved config file contains malformed JSON.
+    Raises FileNotFoundError if config_path is provided but does not exist.
     """
     if allowed_hosts is None:
-        allowed_hosts = load_allowed_hosts()
+        effective_config = config_path if config_path is not None else find_config(recipe_path)
+        allowed_hosts = load_allowed_hosts(effective_config)
 
     errors: list[Error] = []
 
@@ -335,18 +343,37 @@ def validate(
 # CLI
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <path/to/recipe.json>", file=sys.stderr)
-        sys.exit(1)
+def main(argv: list[str] | None = None) -> int:
+    import argparse
 
-    errors = validate(Path(sys.argv[1]))
+    parser = argparse.ArgumentParser(
+        prog="ahimsa-validate",
+        description="Validate a recipe.json against ahimsa rules.",
+    )
+    parser.add_argument("recipe", type=Path, help="path to recipe.json")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="explicit config.json — overrides walk-up discovery",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        errors = validate(args.recipe, config_path=args.config)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
     for err in errors:
         print(err)
 
-    sys.exit(1 if errors else 0)
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
