@@ -95,15 +95,39 @@ ahimsa maintains a whitelist of hosts from which applugs may be fetched.
 
 **Default:** `["github.com"]`
 
-**Override priority (highest → lowest):**
+**Configuration precedence (highest → lowest):**
 
-1. `AHIMSA_ALLOWED_HOSTS` environment variable — comma-separated list,
-   e.g. `AHIMSA_ALLOWED_HOSTS=github.com,internal.example.com`
-2. `config.json` at the repo root — `{ "allowed_hosts": ["github.com"] }`
+1. `--config <path>` CLI flag — explicit path to a config.json file.
+2. Walked-up `config.json` — the validator searches upward from the recipe
+   file's directory, stopping at the first `config.json` found or at a
+   project-root marker (`.git`, `pyproject.toml`, `package.json`).
 3. Built-in default: `["github.com"]`
 
-If `config.json` is absent the default is used silently. If it exists but
-contains malformed JSON, validation aborts with an error.
+There is no environment-variable override. Configuration lives in files,
+not in the process environment.
+
+**Walk-up algorithm:**
+
+Starting at the recipe file's directory, at each level:
+1. If `config.json` is present, use it and stop.
+2. If a project-root marker (`.git`, `pyproject.toml`, `package.json`) is
+   present, stop and use the default.
+3. Otherwise, ascend one level. Stop at the filesystem root.
+
+This means the closest `config.json` wins, and the walk never escapes the
+project tree to find an unrelated config in an ancestor directory.
+
+**`--config` flag:**
+
+```
+ahimsa-validate --config path/to/config.json recipes/myapp/recipe.json
+```
+
+Exit code 2 if the provided config file is missing or contains malformed JSON.
+
+If `config.json` is absent (and no `--config` given), the default is used
+silently. If a `config.json` is found but contains malformed JSON, validation
+aborts with exit code 2.
 
 ---
 
