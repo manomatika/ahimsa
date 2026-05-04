@@ -1,239 +1,334 @@
 """
 validate_recipe.py — validates a recipe.json against ahimsa rules.
 
-Rules enforced:
-  1. Schema check — required fields present: application.name,
-     application.version, matika.version, matika.repo, applugs (non-empty array).
-  2. Each applug entry must have: name, repo, version, matika_version, tag.
-  3. All applugs must declare identical matika_version values.
-  4. Every applug matika_version must match recipe.matika.version.
-  5. For each applug, fetch its applug.json from the declared GitHub repo
-     at the declared tag and assert its matika_version matches the recipe.
-
 Usage:
   python3 scripts/validate_recipe.py recipes/pffp/recipe.json
+
+Exit codes:
+  0 — all checks passed
+  1 — one or more errors (all printed before exit)
 """
 
 import json
+import re
 import sys
-import urllib.request
-import urllib.error
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from pathlib import Path
+
+import requests
+
+from _config import load_allowed_hosts
 
 
 # ---------------------------------------------------------------------------
-# Result type
+# Result types
 # ---------------------------------------------------------------------------
 
 @dataclass
-class CheckResult:
-    passed: bool
-    label: str
+class Error:
+    pointer: str
     message: str
 
     def __str__(self) -> str:
-        status = "PASS" if self.passed else "FAIL"
-        return f"  [{status}] {self.label}: {self.message}"
+        return f"{self.pointer}: {self.message}"
+
+
+@dataclass
+class AppLugManifest:
+    id: str
+    version: str
+    matika_version: str
 
 
 # ---------------------------------------------------------------------------
-# Utilities
+# Module-level GitHub API canonicalization cache
 # ---------------------------------------------------------------------------
 
-REQUIRED_APPLUG_FIELDS = ["name", "repo", "version", "matika_version", "tag"]
-
-
-def _github_raw_url(repo: str, tag: str, path: str) -> str:
-    """Constructs a raw.githubusercontent.com URL from a repo identifier."""
-    repo = repo.removeprefix("https://").removeprefix("http://").removeprefix("github.com/")
-    return f"https://raw.githubusercontent.com/{repo}/{tag}/{path}"
-
-
-def _fetch_json(url: str) -> dict:
-    """Fetches and parses JSON from a URL. Raises RuntimeError on any failure."""
-    try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"HTTP {e.code} fetching {url}")
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"Network error fetching {url}: {e.reason}")
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Invalid JSON at {url}: {e}")
+# Maps lowercase "owner/repo" -> (canonical_owner, canonical_repo).
+# Populated on first access; lives for the process lifetime.
+_repo_cache: dict[str, tuple[str, str]] = {}
 
 
 # ---------------------------------------------------------------------------
-# Resolver
+# Resolver hierarchy
 # ---------------------------------------------------------------------------
 
-def resolve_applug(name: str, version: str, registry=None, **kwargs) -> dict:
-    """
-    Fetches the applug.json for a given AppLug and returns it as a dict.
+class BaseResolver(ABC):
+    def __init__(self, host: str) -> None:
+        self.host = host
 
-    Args:
-        name:     AppLug identifier (e.g. "eyerate").
-        version:  AppLug version to resolve (e.g. "0.0.2").
-        registry: Optional URL of the ahimsa registry repo. When provided,
-                  metadata is fetched from the registry rather than directly
-                  from the AppLug's source repo (future implementation).
-        **kwargs: repo (str), tag (str) — required when registry is None.
-
-    Returns:
-        Parsed applug.json dict.
-
-    Raises:
-        RuntimeError on fetch or parse failure.
-    """
-    if registry:
-        # Future: fetch pre-validated metadata from the ahimsa registry repo.
-        # registry will be a URL such as "github.com/pjtallman/ahimsa-registry".
-        # Look up by (name, version) to retrieve the canonical applug.json.
-        raise NotImplementedError(
-            f"Registry resolver not yet implemented (registry={registry})"
+    def resolve(self, name: str, repo: str, tag: str) -> AppLugManifest:
+        """Template method: parse → canonicalize → build URL → fetch → return."""
+        owner, repo_name = self._parse_repo(repo)
+        canonical = self._canonicalize_repo(owner, repo_name)
+        url = self._raw_url(canonical, tag, "applug.json")
+        data = self._fetch_json(url)
+        return AppLugManifest(
+            id=data.get("id", ""),
+            version=data.get("version", ""),
+            matika_version=data.get("matika_version", ""),
         )
-    else:
-        repo = kwargs.get("repo")
-        tag = kwargs.get("tag")
-        if not repo or not tag:
+
+    def _parse_repo(self, repo: str) -> tuple[str, str]:
+        """Strict parsing: must be exactly <host>/<owner>/<repo>, no extras."""
+        parts = repo.split("/")
+        if len(parts) != 3 or parts[0] != self.host:
             raise ValueError(
-                f"resolve_applug: 'repo' and 'tag' are required when registry is None "
-                f"(applug '{name}')"
+                f'malformed repo "{repo}", expected "{self.host}/<owner>/<repo>"'
             )
-        url = _github_raw_url(repo, tag, "applug.json")
-        return _fetch_json(url)
+        owner, repo_name = parts[1], parts[2]
+        if not owner or not repo_name:
+            raise ValueError(
+                f'malformed repo "{repo}", expected "{self.host}/<owner>/<repo>"'
+            )
+        if repo_name.endswith(".git"):
+            raise ValueError(
+                f'malformed repo "{repo}" — trailing ".git" not allowed'
+            )
+        return owner, repo_name
+
+    @abstractmethod
+    def _canonicalize_repo(self, owner: str, repo: str) -> tuple[str, str]: ...
+
+    @abstractmethod
+    def _raw_url(self, canonical: tuple[str, str], tag: str, path: str) -> str: ...
+
+    def _fetch_json(self, url: str) -> dict:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 404:
+            raise FileNotFoundError(f"file not found at {url}")
+        resp.raise_for_status()
+        return resp.json()
+
+
+class GitHubResolver(BaseResolver):
+    def __init__(self) -> None:
+        super().__init__(host="github.com")
+
+    def _canonicalize_repo(self, owner: str, repo: str) -> tuple[str, str]:
+        """Resolve owner/repo to canonical casing via the GitHub API (cached)."""
+        key = f"{owner}/{repo}".lower()
+        if key not in _repo_cache:
+            resp = requests.get(
+                f"https://api.github.com/repos/{owner}/{repo}",
+                timeout=10,
+                headers={"Accept": "application/vnd.github+json"},
+            )
+            if resp.status_code == 404:
+                raise LookupError(
+                    f'repository "{owner}/{repo}" not found on GitHub'
+                )
+            resp.raise_for_status()
+            full_name: str = resp.json()["full_name"]
+            canonical_owner, canonical_repo = full_name.split("/", 1)
+            _repo_cache[key] = (canonical_owner, canonical_repo)
+        return _repo_cache[key]
+
+    def _raw_url(self, canonical: tuple[str, str], tag: str, path: str) -> str:
+        owner, repo = canonical
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/{tag}/{path}"
 
 
 # ---------------------------------------------------------------------------
-# Validator
+# Resolver registry and dispatch
 # ---------------------------------------------------------------------------
 
-def validate(path: str, registry=None) -> list[CheckResult]:
+_RESOLVER_REGISTRY: dict[str, type[BaseResolver]] = {
+    "github.com": GitHubResolver,
+}
+
+
+def resolver_for(repo: str, *, allowed_hosts: list[str]) -> BaseResolver:
+    """Return a resolver instance for the host in *repo*.
+
+    Raises PermissionError if the host is not in allowed_hosts.
+    Raises LookupError if the host is allowed but has no registered resolver.
     """
-    Validates a recipe.json at the given path.
+    host = repo.split("/", 1)[0]
+    if host not in allowed_hosts:
+        raise PermissionError(f'host "{host}" not in allowed_hosts')
+    cls = _RESOLVER_REGISTRY.get(host)
+    if cls is None:
+        raise LookupError(f'host "{host}" allowed but no resolver registered')
+    return cls()
 
-    Runs all checks and returns a list of CheckResult — one per check.
-    No check is skipped except when a preceding structural failure makes it
-    impossible to run (e.g. if applugs is absent, per-applug checks are skipped).
+
+# ---------------------------------------------------------------------------
+# Validation constants
+# ---------------------------------------------------------------------------
+
+_VERSION_RE = re.compile(r'^\d+\.\d+\.\d+$')
+_BUNDLE_ID_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9-]*(\.[a-zA-Z][a-zA-Z0-9-]*){2,}$')
+
+
+def _check_version(errors: list[Error], value: str, pointer: str) -> None:
+    if not _VERSION_RE.match(value):
+        errors.append(Error(pointer, f'"{value}" is not a valid version — must be exact X.Y.Z'))
+
+
+def _check_bundle_id(errors: list[Error], value: str, pointer: str) -> None:
+    if not _BUNDLE_ID_RE.match(value):
+        errors.append(Error(pointer, f'not a valid reverse-DNS identifier ("{value}")'))
+
+
+# ---------------------------------------------------------------------------
+# validate()
+# ---------------------------------------------------------------------------
+
+def validate(
+    recipe_path: Path,
+    *,
+    resolvers: dict[str, BaseResolver] | None = None,
+    allowed_hosts: list[str] | None = None,
+) -> list[Error]:
+    """Validate a recipe.json. Returns a (possibly empty) list of errors.
+
+    resolvers: host -> resolver instance map, injected by tests to avoid network.
+    allowed_hosts: overrides load_allowed_hosts(); defaults to config/env.
     """
-    results: list[CheckResult] = []
+    if allowed_hosts is None:
+        allowed_hosts = load_allowed_hosts()
 
-    def ok(label: str, message: str) -> None:
-        results.append(CheckResult(passed=True, label=label, message=message))
-
-    def fail(label: str, message: str) -> None:
-        results.append(CheckResult(passed=False, label=label, message=message))
+    errors: list[Error] = []
 
     # --- Load file ---
     try:
-        with open(path) as f:
+        with open(recipe_path) as f:
             recipe = json.load(f)
     except FileNotFoundError:
-        fail("load", f"file not found: {path}")
-        return results
+        errors.append(Error("recipe", f'file not found: "{recipe_path}"'))
+        return errors
     except json.JSONDecodeError as e:
-        fail("load", f"invalid JSON: {e}")
-        return results
+        errors.append(Error("recipe", f"invalid JSON: {e}"))
+        return errors
 
-    # --- 1. Schema: required top-level fields ---
+    # --- Schema: application ---
     app = recipe.get("application") or {}
+
+    for field in ("name", "version", "bundle_id", "icon"):
+        if not app.get(field):
+            errors.append(Error(f"application.{field}", "required field missing"))
+
+    if app.get("version"):
+        _check_version(errors, app["version"], "application.version")
+
+    if app.get("bundle_id"):
+        _check_bundle_id(errors, app["bundle_id"], "application.bundle_id")
+
+    # --- Schema: matika ---
     matika = recipe.get("matika") or {}
+
+    for field in ("version", "repo", "tag"):
+        if not matika.get(field):
+            errors.append(Error(f"matika.{field}", "required field missing"))
+
+    if matika.get("version"):
+        _check_version(errors, matika["version"], "matika.version")
+
+    # --- Schema: applugs ---
     applugs_raw = recipe.get("applugs")
-
-    for field, value in [
-        ("application.name",    app.get("name")),
-        ("application.version", app.get("version")),
-        ("matika.version",      matika.get("version")),
-        ("matika.repo",         matika.get("repo")),
-    ]:
-        if value:
-            ok("schema", f"{field} present ({value!r})")
-        else:
-            fail("schema", f"{field} missing — required field not found")
-
-    if isinstance(applugs_raw, list) and len(applugs_raw) > 0:
-        ok("schema", f"applugs is a non-empty array ({len(applugs_raw)} entr{'y' if len(applugs_raw) == 1 else 'ies'})")
-    elif isinstance(applugs_raw, list):
-        fail("schema", "applugs is an empty array — at least one AppLug is required")
-    else:
-        fail("schema", "applugs missing or not an array — required field not found")
+    if not isinstance(applugs_raw, list) or len(applugs_raw) == 0:
+        errors.append(Error("applugs", "required field missing or empty array"))
+        return errors
 
     recipe_mv = matika.get("version", "")
-    applugs: list[dict] = applugs_raw if isinstance(applugs_raw, list) else []
+    applugs: list[dict] = applugs_raw
+    structurally_valid: list[tuple[int, dict]] = []
 
-    # --- 2. Per-applug: required field presence ---
-    structurally_valid: list[dict] = []
-    for plug in applugs:
-        name = plug.get("name") or "<unnamed>"
-        label = f"applug[{name}]"
+    for i, plug in enumerate(applugs):
+        ptr = f"applugs[{i}]"
         all_present = True
-        for field in REQUIRED_APPLUG_FIELDS:
-            if plug.get(field):
-                ok(label, f"required field '{field}' present ({plug[field]!r})")
-            else:
-                fail(label, f"required field '{field}' missing")
+
+        for field in ("name", "repo", "version", "matika_version", "tag"):
+            if not plug.get(field):
+                errors.append(Error(f"{ptr}.{field}", "required field missing"))
                 all_present = False
+
+        if plug.get("version"):
+            _check_version(errors, plug["version"], f"{ptr}.version")
+
+        if plug.get("matika_version"):
+            _check_version(errors, plug["matika_version"], f"{ptr}.matika_version")
+
         if all_present:
-            structurally_valid.append(plug)
+            structurally_valid.append((i, plug))
 
-    # --- 3. Consistency: identical matika_version across all applugs ---
-    declared_mvs = [p["matika_version"] for p in structurally_valid if p.get("matika_version")]
-    if len(set(declared_mvs)) <= 1:
-        value_str = declared_mvs[0] if declared_mvs else "n/a"
-        ok("consistency", f"all applug matika_version values are identical ({value_str!r})")
-    else:
-        fail(
-            "consistency",
-            f"applugs declare conflicting matika_version values: {sorted(set(declared_mvs))} "
-            f"— all must be identical",
-        )
+    # --- Cross-applug consistency ---
+    declared_mvs = {
+        plug["matika_version"]
+        for _, plug in structurally_valid
+        if plug.get("matika_version")
+    }
+    if len(declared_mvs) > 1:
+        errors.append(Error(
+            "applugs",
+            f"applugs declare conflicting matika_version values: {sorted(declared_mvs)}",
+        ))
 
-    # --- 4. Consistency: every applug matika_version matches recipe.matika.version ---
-    mismatches = [
-        p["name"] for p in structurally_valid
-        if p.get("matika_version") and p["matika_version"] != recipe_mv
-    ]
-    if not mismatches:
-        ok(
-            "consistency",
-            f"all applug matika_version values match recipe matika.version ({recipe_mv!r})",
-        )
-    else:
-        for plug in structurally_valid:
-            if plug.get("name") in mismatches:
-                fail(
-                    "consistency",
-                    f"applug '{plug['name']}' matika_version={plug['matika_version']!r} "
-                    f"does not match recipe matika.version={recipe_mv!r}",
-                )
+    # --- Recipe-matika consistency ---
+    for i, plug in structurally_valid:
+        mv = plug.get("matika_version", "")
+        if mv and mv != recipe_mv:
+            errors.append(Error(
+                f"applugs[{i}].matika_version",
+                f'"{mv}" does not match recipe matika.version "{recipe_mv}"',
+            ))
 
-    # --- 5. Resolve: fetch each applug.json and verify matika_version ---
-    for plug in structurally_valid:
+    # --- Remote verification ---
+    for i, plug in structurally_valid:
+        ptr = f"applugs[{i}]"
         name = plug["name"]
-        tag = plug["tag"]
         repo = plug["repo"]
-        label = f"resolve[{name}@{tag}]"
+        tag = plug["tag"]
 
+        # Select resolver
+        if resolvers is not None:
+            host = repo.split("/", 1)[0]
+            res = resolvers.get(host)
+            if res is None:
+                errors.append(Error(f"{ptr}.repo", f'no resolver for host "{host}"'))
+                continue
+        else:
+            try:
+                res = resolver_for(repo, allowed_hosts=allowed_hosts)
+            except (PermissionError, LookupError) as e:
+                errors.append(Error(f"{ptr}.repo", str(e)))
+                continue
+
+        # Fetch and verify manifest
         try:
-            remote = resolve_applug(name, plug["version"], registry=registry, repo=repo, tag=tag)
-            ok(label, f"fetched applug.json from {repo}")
-        except (RuntimeError, NotImplementedError, ValueError) as e:
-            fail(label, str(e))
+            manifest = res.resolve(name, repo, tag)
+        except ValueError as e:
+            errors.append(Error(f"{ptr}.repo", str(e)))
+            continue
+        except (LookupError, PermissionError) as e:
+            errors.append(Error(f"{ptr}.repo", str(e)))
+            continue
+        except FileNotFoundError as e:
+            errors.append(Error(f"{ptr}.resolve", str(e)))
+            continue
+        except Exception as e:
+            errors.append(Error(f"{ptr}.resolve", str(e)))
             continue
 
-        remote_mv = remote.get("matika_version")
-        if remote_mv is None:
-            fail(label, "applug.json does not declare matika_version")
-        elif remote_mv == recipe_mv:
-            ok(label, f"matika_version {remote_mv!r} matches recipe ({recipe_mv!r})")
-        else:
-            fail(
-                label,
-                f"applug.json matika_version={remote_mv!r} does not match "
-                f"recipe matika.version={recipe_mv!r}",
-            )
+        if manifest.id != name:
+            errors.append(Error(
+                f"{ptr}.resolve",
+                f'applug.json id "{manifest.id}" does not match recipe name "{name}"',
+            ))
+        if manifest.version != plug["version"]:
+            errors.append(Error(
+                f"{ptr}.resolve",
+                f'applug.json version "{manifest.version}" does not match recipe version "{plug["version"]}"',
+            ))
+        if manifest.matika_version != plug["matika_version"]:
+            errors.append(Error(
+                f"{ptr}.resolve",
+                f'applug.json matika_version "{manifest.matika_version}" does not match recipe matika_version "{plug["matika_version"]}"',
+            ))
 
-    return results
+    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -242,25 +337,15 @@ def validate(path: str, registry=None) -> list[CheckResult]:
 
 def main() -> None:
     if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <path/to/recipe.json>")
+        print(f"Usage: {sys.argv[0]} <path/to/recipe.json>", file=sys.stderr)
         sys.exit(1)
 
-    path = sys.argv[1]
-    results = validate(path)
+    errors = validate(Path(sys.argv[1]))
 
-    for r in results:
-        print(r)
+    for err in errors:
+        print(err)
 
-    failed = [r for r in results if not r.passed]
-    total = len(results)
-
-    print()
-    if not failed:
-        print(f"All {total} checks passed.")
-        sys.exit(0)
-    else:
-        print(f"{len(failed)} of {total} checks failed.")
-        sys.exit(1)
+    sys.exit(1 if errors else 0)
 
 
 if __name__ == "__main__":

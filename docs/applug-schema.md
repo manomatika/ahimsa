@@ -70,16 +70,58 @@ minor.
 
 ---
 
+## repo Format
+
+`applugs[].repo` (and `matika.repo`) must be exactly three slash-separated
+components: `<host>/<owner>/<repo>`. No URL scheme, no trailing `.git`, no SSH
+form.
+
+| Form | Valid? |
+|---|---|
+| `github.com/pjtallman/Matika` | ✓ |
+| `https://github.com/pjtallman/Matika` | ✗ — no scheme allowed |
+| `github.com/pjtallman/Matika.git` | ✗ — trailing `.git` not allowed |
+| `git@github.com:pjtallman/Matika.git` | ✗ — SSH form not allowed |
+| `pjtallman/Matika` | ✗ — host component required |
+
+The host component must appear in `allowed_hosts` (see below) or the validator
+rejects the recipe.
+
+---
+
+## allowed_hosts
+
+ahimsa maintains a whitelist of hosts from which applugs may be fetched.
+
+**Default:** `["github.com"]`
+
+**Override priority (highest → lowest):**
+
+1. `AHIMSA_ALLOWED_HOSTS` environment variable — comma-separated list,
+   e.g. `AHIMSA_ALLOWED_HOSTS=github.com,internal.example.com`
+2. `config.json` at the repo root — `{ "allowed_hosts": ["github.com"] }`
+3. Built-in default: `["github.com"]`
+
+If `config.json` is absent the default is used silently. If it exists but
+contains malformed JSON, validation aborts with an error.
+
+---
+
 ## How ahimsa Fetches applug.json
 
-For each AppLug in a recipe, ahimsa constructs:
+For each AppLug in a recipe, ahimsa:
+
+1. Verifies the repo host is in `allowed_hosts`.
+2. Canonicalizes the owner/repo casing via the GitHub API (case-insensitive)
+   and caches the result for the process lifetime — recipes with multiple
+   AppLugs from the same org hit the API once.
+3. Constructs the raw URL:
 
 ```
-https://raw.githubusercontent.com/<org>/<repo>/<tag>/applug.json
+https://raw.githubusercontent.com/<canonical-owner>/<canonical-repo>/<tag>/applug.json
 ```
 
-using `applugs[].repo` (with `github.com/` prefix stripped) and
-`applugs[].tag`. The validator then asserts:
+The validator then asserts:
 
 | Check | Expected |
 |---|---|
