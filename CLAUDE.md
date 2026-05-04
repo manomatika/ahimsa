@@ -86,16 +86,28 @@ pytest tests/
 
 ```
 ahimsa-validate recipes/reference-app/recipe.json
-ahimsa-validate --config path/to/config.json recipes/pffp/recipe.json
+ahimsa-validate --config path/to/config.json recipes/reference-app/recipe.json
 ```
 
 ## Validation Rules
 
-- All applugs must declare identical matika_version values
-- All applug matika_version values must match recipe.matika.version
-- matika.repo is required
-- Exact version pins only — never ranges
-- Validator fetches applug.json from GitHub at declared tag
+`validate_recipe.py` enforces all rules in a single pass, accumulating errors rather than failing fast. Every error carries a JSON pointer and a clear message. Exit codes: 0 (clean), 1 (validation failure), 2 (configuration error — bad `--config` path or malformed config JSON).
+
+**Schema validation**
+- Required fields: `application.{name, version, bundle_id, icon}`, `matika.{version, repo, tag}`, `applugs` (non-empty array), per-applug `{name, repo, version, matika_version, tag}`
+- Version format: every version field must match `^\d+\.\d+\.\d+$` exactly — ranges (`^`, `>=`, `~`), wildcards (`*`, `latest`, `1.x`), pre-release suffixes (`-rc1`, `+build`), and `_dev` suffixes are all rejected
+- `bundle_id` format: reverse-DNS, minimum 3 dot-separated components, each starting with a letter and containing only letters/digits/hyphens: `^[a-zA-Z][a-zA-Z0-9-]*(\.[a-zA-Z][a-zA-Z0-9-]*){2,}$`
+
+**Consistency rules**
+- All `applugs[i].matika_version` values must be identical — mixing applugs built against different Matika versions is a hard error
+- Every `applugs[i].matika_version` must equal `matika.version` — the bundled Matika must match what every applug declares it was built against
+
+**Remote verification**
+- For each structurally-valid applug, fetches `applug.json` from the declared GitHub repo at the declared tag via the Resolver (see below)
+- Verifies: `applug.json.id` matches recipe `name`; `applug.json.version` matches recipe `version`; `applug.json.matika_version` matches recipe `matika_version`
+
+**Repo format**
+- `applugs[i].repo` (and `matika.repo`) must be exactly `<host>/<owner>/<repo>` — no URL scheme, no trailing `.git`, no SSH form, exactly three slash-separated components
 
 ## Config Precedence
 
@@ -107,16 +119,21 @@ No environment-variable override. Walk-up starts at the recipe's directory,
 stops at the first `config.json` found, or at a project-root marker (`.git`,
 `pyproject.toml`, `package.json`), never crossing the filesystem root.
 
-Security rationale: config.json is committed to the repo and controls which
-hosts recipes may reference. Keeping it in-repo (not env-vars) means the
-policy is auditable, version-controlled, and can't be silently overridden by
-shell environment.
+Security rationale: `config.json` is committed to the repo and controls which hosts recipes may reference. Keeping it in-repo (not env-vars) means the policy is auditable, version-controlled, and can't be silently overridden by the shell environment. This becomes important when ahimsa accepts third-party recipes (M4 registry era) — a recipe cannot bypass the validator's policy by declaring its own allowed hosts.
+
+The defense is incomplete without code signing: unsigned installers can be modified in transit to ship a permissive `config.json` or a tampered validator. Code signing and notarization track in [M5 — Code Signing & Distribution Security](https://github.com/pjtallman/ahimsa/milestone/6) and are required before any external distribution.
 
 ## Resolver Protocol
 
-- `ahimsa/validate_recipe.py` abstracts manifest fetching behind `BaseResolver` ABC with a template-method `resolve()`. `GitHubResolver` is the only concrete implementation today; a future `RegistryResolver` will land for the registry milestone (M4) without changing call sites.
-- `raw.githubusercontent.com` is case-sensitive on owner/repo paths. `GitHubResolver` canonicalizes via the GitHub API (which is case-insensitive) before constructing raw URLs. Cached per-process to avoid redundant API calls.
-- Tests inject `BaseResolver` subclasses via `validate(..., resolvers={...})` — no network hit in tests.
+`BaseResolver` is an ABC with a template-method `resolve(name, repo, tag) → AppLugManifest`. Subclasses implement `_canonicalize_repo()` and `_raw_url()`; `_parse_repo()` and `_fetch_json()` are shared. `GitHubResolver` is the only concrete implementation today; a future `RegistryResolver` drops in at the M4 registry milestone without changing `validate()` call sites.
+
+**Host dispatch** — `resolver_for(repo, allowed_hosts)` extracts the host from the repo string and looks it up in `_RESOLVER_REGISTRY`. Two distinct errors:
+- Host not in `allowed_hosts` → `PermissionError` → error pointer `applugs[i].repo: host "X" not in allowed_hosts`
+- Host in `allowed_hosts` but no registered resolver → `LookupError` → error pointer `applugs[i].repo: host "X" allowed but no resolver registered`
+
+**GitHubResolver specifics** — `raw.githubusercontent.com` is case-sensitive on owner/repo paths. `GitHubResolver._canonicalize_repo()` resolves canonical casing via the GitHub API (which is case-insensitive) and caches the result per-process — recipes with multiple applugs from the same org hit the API once.
+
+**Testing** — Tests inject `BaseResolver` subclasses via `validate(..., resolvers={"github.com": mock})` — no network hit. Mock resolvers must be genuine `BaseResolver` subclasses (not duck-typed) so interface changes are caught at test time.
 
 ## GitHub Actions Workflows
 
@@ -141,9 +158,19 @@ shell environment.
 - Ahimsa is downstream of matika and applug releases — it consumes only released, tagged versions. Steady-state: a matika or applug release → ahimsa picks it up via recipe update → ahimsa releases.
 - v0.0.4 is the exception cycle: ahimsa is being built for the first time (its own version is v0.0.1). matika v0.0.4 and eyerate v0.0.4 will be released first; ahimsa v0.0.1 will then be finalized against those real tags.
 
+## Test Fixture Convention
+
+`tests/fixtures/` contains per-scenario directories, each self-contained:
+- `invalid_host/` — `recipe.json` + `config.json` allowing only `github.com` → policy rejects `test.invalid`
+- `valid_local_config/` — same recipe + `config.json` allowing `test.invalid` → policy passes, dispatch fails (no resolver registered for `test.invalid`)
+- `no_config/` — same recipe + `pyproject.toml` stop-marker, no `config.json` → walk-up stops, default policy rejects `test.invalid`
+
+`test.invalid` is an RFC 6761 reserved name that never resolves on any real network — every fixture test runs offline.
+
 ## Standing Rules
 
 - Never git merge, never rm -rf
 - All recipe changes must pass validate.yml before merge
 - Exact version pins only in recipe.json — never ranges
 - recipe.json is the sole source of truth for what ships
+- Standard Python `.gitignore` (GitHub's official Python template) is in place: covers `__pycache__/`, build/dist, `*.egg-info/`, `.pytest_cache/`, `.coverage`, `htmlcov/`, venv variants, `.tox/`, installer artifacts (`*.dmg`, `*.exe`, etc.), and OS/IDE noise. Never commit compiled artifacts.
