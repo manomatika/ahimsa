@@ -1,0 +1,2 @@
+# Marker file — stops the config.json walk-up at this directory.
+# This fixture has no config.json; the validator must use the default allowed_hosts.

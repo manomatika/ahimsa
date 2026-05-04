@@ -94,7 +94,7 @@ The following rules are enforced:
      "name": "myplugin",
      "repo": "github.com/org/myplugin",
      "version": "1.2.0",
-     "matika_version": "0.0.2",
+     "matika_version": "0.0.4",
      "tag": "v1.2.0"
    }
    ```

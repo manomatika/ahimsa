@@ -1,0 +1,26 @@
+# Build backend: hatchling — PEP 621 native, lightweight, no setup.py required.
+# Version is read from the VERSION file at build time via the regex source.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ahimsa"
+dynamic = ["version"]
+description = "Build, validation, and release system for Matika-based applications."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["requests"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = "(?P<version>[^\n]+)"
+
+[project.scripts]
+ahimsa-validate = "ahimsa.validate_recipe:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ahimsa"]

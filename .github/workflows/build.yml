@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       recipe_path:
-        description: "Path to recipe.json (e.g. recipes/pffp/recipe.json)"
+        description: "Path to recipe.json (e.g. recipes/reference-app/recipe.json)"
         required: false
-        default: "recipes/pffp/recipe.json"
+        default: "recipes/reference-app/recipe.json"
   push:
     tags:
       - "v*"
@@ -18,7 +18,7 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     env:
-      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
     runs-on: macos-14
     needs: validate
     env:
-      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -147,7 +147,7 @@ jobs:
     runs-on: macos-13
     needs: validate
     env:
-      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -253,7 +253,7 @@ jobs:
     runs-on: windows-latest
     needs: validate
     env:
-      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -360,7 +360,7 @@ jobs:
     needs: [build-macos-arm, build-macos-intel, build-windows]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     env:
-      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/pffp/recipe.json' }}
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
