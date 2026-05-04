@@ -56,7 +56,7 @@ tests/                    — pytest test suite
   fixtures/               — per-scenario recipe + config fixtures
 scripts/
   build_standalone.py     — build orchestration (stubbed, not part of package)
-VERSION                   — single source of version ("0.0.4_dev")
+VERSION                   — single source of version ("0.0.1_dev")
 pyproject.toml            — package metadata; hatchling reads VERSION at build time
 config.json               — project-level allowed_hosts (walked up from recipes/)
 ```
@@ -139,7 +139,7 @@ shell environment.
 ## Workflow Positioning
 
 - Ahimsa is downstream of matika and applug releases — it consumes only released, tagged versions. Steady-state: a matika or applug release → ahimsa picks it up via recipe update → ahimsa releases.
-- v0.0.4 is the exception: ahimsa is being built for the first time. matika v0.0.4 and eyerate v0.0.4 will be released first; ahimsa v0.0.4 will then be finalized against those real tags.
+- v0.0.4 is the exception cycle: ahimsa is being built for the first time (its own version is v0.0.1). matika v0.0.4 and eyerate v0.0.4 will be released first; ahimsa v0.0.1 will then be finalized against those real tags.
 
 ## Standing Rules
 
