@@ -40,9 +40,54 @@ recipes/pffp/recipe.json — Pats Fantastic Finance Pro
 - matika 0.0.4 from github.com/pjtallman/Matika
 - eyerate 0.0.4 from github.com/pjtallman/EyeRate
 
+## Package Layout
+
+Ahimsa is an installable Python package (PEP 621, hatchling backend).
+
+```
+ahimsa/                   — installable package (import as `ahimsa`)
+  __init__.py             — exposes __version__ via importlib.metadata
+  validate_recipe.py      — validator library + CLI entry point
+  _config.py              — config loader (walk-up algorithm)
+tests/                    — pytest test suite
+  test_validate_recipe.py — unit tests (mock resolvers, no network)
+  test_invocation.py      — four subprocess invocation-style tests
+  test_config_precedence.py — walk-up and --config precedence matrix
+  fixtures/               — per-scenario recipe + config fixtures
+scripts/
+  build_standalone.py     — build orchestration (stubbed, not part of package)
+VERSION                   — single source of version ("0.0.4_dev")
+pyproject.toml            — package metadata; hatchling reads VERSION at build time
+config.json               — project-level allowed_hosts (walked up from recipes/)
+```
+
+## Development Install
+
+```
+pip install -e ".[test]"
+```
+
+After install, all four invocation styles work:
+
+```bash
+ahimsa-validate recipes/pffp/recipe.json        # console-script entry point
+python3 -m ahimsa.validate_recipe <recipe>      # module invocation
+python3 ahimsa/validate_recipe.py <recipe>      # direct file
+python3 -c "from ahimsa.validate_recipe import validate; ..."
+```
+
+Run tests:
+
+```
+pytest tests/
+```
+
 ## Running the Validator
 
-python3 scripts/validate_recipe.py recipes/pffp/recipe.json
+```
+ahimsa-validate recipes/pffp/recipe.json
+ahimsa-validate --config path/to/config.json recipes/pffp/recipe.json
+```
 
 ## Validation Rules
 
@@ -52,15 +97,32 @@ python3 scripts/validate_recipe.py recipes/pffp/recipe.json
 - Exact version pins only — never ranges
 - Validator fetches applug.json from GitHub at declared tag
 
+## Config Precedence
+
+```
+--config <path>   >   walked-up config.json   >   default ["github.com"]
+```
+
+No environment-variable override. Walk-up starts at the recipe's directory,
+stops at the first `config.json` found, or at a project-root marker (`.git`,
+`pyproject.toml`, `package.json`), never crossing the filesystem root.
+
+Security rationale: config.json is committed to the repo and controls which
+hosts recipes may reference. Keeping it in-repo (not env-vars) means the
+policy is auditable, version-controlled, and can't be silently overridden by
+shell environment.
+
 ## Resolver Protocol
 
-- The validator (`scripts/validate_recipe.py`) abstracts manifest fetching via a resolver protocol. `GitHubResolver` is the only concrete implementation today; a future `RegistryResolver` will land for the registry milestone (M4) without changing call sites. `validate()` defaults to `GitHubResolver()`; tests inject a mock.
+- `ahimsa/validate_recipe.py` abstracts manifest fetching behind `BaseResolver` ABC with a template-method `resolve()`. `GitHubResolver` is the only concrete implementation today; a future `RegistryResolver` will land for the registry milestone (M4) without changing call sites.
 - `raw.githubusercontent.com` is case-sensitive on owner/repo paths. `GitHubResolver` canonicalizes via the GitHub API (which is case-insensitive) before constructing raw URLs. Cached per-process to avoid redundant API calls.
+- Tests inject `BaseResolver` subclasses via `validate(..., resolvers={...})` — no network hit in tests.
 
 ## GitHub Actions Workflows
 
 - validate.yml — runs on every push and PR to main
-  Validates all recipe.json files under recipes/
+  Installs `pip install -e ".[test]"`, runs `pytest tests/`
+  Live recipe step commented out (TODO: re-enable after v0.0.4 tags ship)
 - build.yml — runs on workflow_dispatch or tag push (v*)
   Jobs: validate → build-macos-arm → build-macos-intel → 
   build-windows → release
@@ -69,24 +131,10 @@ python3 scripts/validate_recipe.py recipes/pffp/recipe.json
 ## Architecture Decisions
 
 - Decentralized: recipes point directly at GitHub repos/tags
-- resolve_applug() abstraction ready for future registry support
+- BaseResolver ABC + registry ready for future RegistryResolver (M4)
 - DMG via dmgbuild Python library (macos-14 arm64, macos-13 intel)
 - Windows installer via Inno Setup
 - Release job creates GitHub release with all three artifacts
-
-## Directory Structure
-
-recipes/          — one subdirectory per application
-  pffp/
-    recipe.json   — the lockfile
-registry/         — reserved for future applug registry
-scripts/
-  validate_recipe.py  — recipe validator with resolver abstraction
-  build_standalone.py — build orchestration (stubbed)
-.github/
-  workflows/
-    validate.yml  — CI validation on every PR
-    build.yml     — full build pipeline
 
 ## Workflow Positioning
 
