@@ -1,8 +1,8 @@
 {
   "application": {
-    "name": "Pats Fantastic Finance Pro",
-    "version": "0.0.4",
-    "bundle_id": "com.pjtallman.pffp",
+    "name": "Matika Reference Application",
+    "version": "0.0.1",
+    "bundle_id": "com.pjtallman.matika-reference-app",
     "icon": "assets/icon.icns"
   },
   "matika": {

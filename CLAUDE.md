@@ -36,7 +36,7 @@ composed of one or more AppLugs.
 
 ## Current Recipe
 
-recipes/pffp/recipe.json — Pats Fantastic Finance Pro
+recipes/reference-app/recipe.json — Matika Reference Application
 - matika 0.0.4 from github.com/pjtallman/Matika
 - eyerate 0.0.4 from github.com/pjtallman/EyeRate
 
@@ -70,7 +70,7 @@ pip install -e ".[test]"
 After install, all four invocation styles work:
 
 ```bash
-ahimsa-validate recipes/pffp/recipe.json        # console-script entry point
+ahimsa-validate recipes/reference-app/recipe.json        # console-script entry point
 python3 -m ahimsa.validate_recipe <recipe>      # module invocation
 python3 ahimsa/validate_recipe.py <recipe>      # direct file
 python3 -c "from ahimsa.validate_recipe import validate; ..."
@@ -85,7 +85,7 @@ pytest tests/
 ## Running the Validator
 
 ```
-ahimsa-validate recipes/pffp/recipe.json
+ahimsa-validate recipes/reference-app/recipe.json
 ahimsa-validate --config path/to/config.json recipes/pffp/recipe.json
 ```
 

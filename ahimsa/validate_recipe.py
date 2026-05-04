@@ -2,8 +2,8 @@
 validate_recipe.py — validates a recipe.json against ahimsa rules.
 
 Usage:
-  ahimsa-validate recipes/pffp/recipe.json
-  python3 -m ahimsa.validate_recipe recipes/pffp/recipe.json
+  ahimsa-validate recipes/reference-app/recipe.json
+  python3 -m ahimsa.validate_recipe recipes/reference-app/recipe.json
 
 Exit codes:
   0 — all checks passed

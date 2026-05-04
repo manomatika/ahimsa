@@ -16,7 +16,8 @@ All notable changes to ahimsa are documented here.
 ### Added
 - Initial ahimsa repo — recipe system and build pipeline for Matika-based
   applications.
-- `recipes/pffp/recipe.json` — scaffold recipe for Pats Fantastic Finance Pro,
+- `recipes/reference-app/recipe.json` — scaffold recipe for the Matika
+  Reference Application (formerly "pffp" / "Pats Fantastic Finance Pro"),
   demonstrating the full schema with application metadata, matika version pin,
   and an EyeRate AppLug declaration.
 - `scripts/validate_recipe.py` — validates a recipe.json against all ahimsa

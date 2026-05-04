@@ -5,7 +5,7 @@ Placeholder implementation. Full build pipeline to be defined in a future
 milestone. This script validates the recipe and reports what would be built.
 
 Usage:
-  python scripts/build_standalone.py recipes/pffp/recipe.json [--platform mac|windows]
+  python scripts/build_standalone.py recipes/reference-app/recipe.json [--platform mac|windows]
 """
 
 import argparse
