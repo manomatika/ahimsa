@@ -174,3 +174,4 @@ The defense is incomplete without code signing: unsigned installers can be modif
 - Exact version pins only in recipe.json — never ranges
 - recipe.json is the sole source of truth for what ships
 - Standard Python `.gitignore` (GitHub's official Python template) is in place: covers `__pycache__/`, build/dist, `*.egg-info/`, `.pytest_cache/`, `.coverage`, `htmlcov/`, venv variants, `.tox/`, installer artifacts (`*.dmg`, `*.exe`, etc.), and OS/IDE noise. Never commit compiled artifacts.
+- **Cross-repo issue references must be fully qualified.** In PR bodies and commit messages, always write `manomatika/ahimsa#N` (or `manomatika/Matika#N`, etc.) — never a bare `#N` — when the issue lives in a different repo than the PR. GitHub resolves bare `#N` relative to the repo where the PR is opened, silently auto-closing the wrong issues. Bare references are only safe when the PR and the issue are in the same repo.
