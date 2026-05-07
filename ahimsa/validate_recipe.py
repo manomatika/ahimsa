@@ -12,6 +12,7 @@ Exit codes:
 """
 
 import json
+import os
 import re
 import sys
 from abc import ABC, abstractmethod
@@ -96,8 +97,18 @@ class BaseResolver(ABC):
     @abstractmethod
     def _raw_url(self, canonical: tuple[str, str], tag: str, path: str) -> str: ...
 
+    def _request_headers(self) -> dict[str, str]:
+        """Return HTTP headers to include on every outbound request.
+
+        Default: empty dict. Subclasses override to inject auth tokens or
+        custom Accept headers. `_fetch_json` and `_fetch_text` consult this
+        method on every call so subclass-level concerns (e.g. host auth)
+        are applied uniformly without each helper knowing the host.
+        """
+        return {}
+
     def _fetch_json(self, url: str) -> dict:
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(url, timeout=10, headers=self._request_headers())
         if resp.status_code == 404:
             raise FileNotFoundError(f"file not found at {url}")
         resp.raise_for_status()
@@ -109,7 +120,7 @@ class BaseResolver(ABC):
         Shared helper for subclasses that fetch arbitrary text files (e.g.
         RELEASES.md). Mirrors `_fetch_json` but for non-JSON payloads.
         """
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(url, timeout=10, headers=self._request_headers())
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
@@ -147,6 +158,17 @@ class BaseResolver(ABC):
 class GitHubResolver(BaseResolver):
     def __init__(self) -> None:
         super().__init__(host="github.com")
+        # Token precedence: GITHUB_TOKEN, then GH_TOKEN (the gh CLI legacy
+        # fallback). Read once at construction; mid-process env changes are
+        # not picked up. Public repos work without a token; private repos
+        # 404 without one — see _canonicalize_repo for the auth-hint message.
+        self._token: str | None = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+
+    def _request_headers(self) -> dict[str, str]:
+        """Inject Authorization when a token is present; otherwise empty."""
+        if self._token:
+            return {"Authorization": f"Bearer {self._token}"}
+        return {}
 
     def _canonicalize_repo(self, owner: str, repo: str) -> tuple[str, str]:
         """Resolve owner/repo to canonical casing via the GitHub API (cached)."""
@@ -155,11 +177,22 @@ class GitHubResolver(BaseResolver):
             resp = requests.get(
                 f"https://api.github.com/repos/{owner}/{repo}",
                 timeout=10,
-                headers={"Accept": "application/vnd.github+json"},
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    **self._request_headers(),
+                },
             )
             if resp.status_code == 404:
+                # 404 here is genuinely ambiguous: the repo doesn't exist OR
+                # the request lacks credentials for a private repo. The token
+                # presence/absence is the disambiguating signal we have.
+                if self._token:
+                    raise LookupError(
+                        f'repository "{owner}/{repo}" not found on GitHub'
+                    )
                 raise LookupError(
-                    f'repository "{owner}/{repo}" not found on GitHub'
+                    f'repository "{owner}/{repo}" not found on GitHub '
+                    f'(or no access — set GITHUB_TOKEN if this is a private repo)'
                 )
             resp.raise_for_status()
             full_name: str = resp.json()["full_name"]
@@ -180,6 +213,11 @@ class GitHubResolver(BaseResolver):
         # The first request includes per_page in `params`; subsequent requests
         # use the fully-formed URL from the Link header (it already encodes
         # the page parameter).
+        #
+        # 404 here means "repo has zero tags" — _canonicalize_repo above has
+        # already validated repo accessibility (and raises with an auth hint
+        # if no token was sent against a private repo), so we don't need to
+        # disambiguate auth at this layer.
         url: str | None = (
             f"https://api.github.com/repos/{canonical_owner}/{canonical_repo}/git/refs/tags"
         )
@@ -190,11 +228,13 @@ class GitHubResolver(BaseResolver):
             resp = requests.get(
                 url,
                 timeout=10,
-                headers={"Accept": "application/vnd.github+json"},
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    **self._request_headers(),
+                },
                 params=params,
             )
             if resp.status_code == 404:
-                # Repo has zero tags → endpoint 404s on the first page.
                 return [] if not tags else tags
             resp.raise_for_status()
             refs = resp.json()

@@ -25,3 +25,13 @@ ahimsa-validate-releases = "ahimsa.validate_releases:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ahimsa"]
+
+[tool.pytest.ini_options]
+# Integration tier exercises the real GitHub API (no auth required — uses
+# guaranteed-public test repos like octocat/Hello-World). Excluded from the
+# default test run because real-network calls are slower and can transiently
+# fail on network blips. Run explicitly with: pytest -m integration
+markers = [
+    "integration: real-network tests against public GitHub (deselect with '-m \"not integration\"')",
+]
+addopts = "-m 'not integration'"
