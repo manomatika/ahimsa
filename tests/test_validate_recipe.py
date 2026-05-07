@@ -60,7 +60,12 @@ VALID_MANIFEST = AppLugManifest(id="eyerate", version="0.0.2", matika_version="0
 
 
 class _OkResolver(BaseResolver):
-    """Always returns a fixed manifest; overrides the template entirely."""
+    """Always returns a fixed manifest; overrides the template entirely.
+
+    `list_tags` and `fetch_text` are concrete no-ops because these tests
+    do not exercise release-log auditing — the transitive call from
+    validate() short-circuits when fetch_text returns None.
+    """
 
     def __init__(self, manifest: AppLugManifest = VALID_MANIFEST) -> None:
         super().__init__(host="github.com")
@@ -74,6 +79,12 @@ class _OkResolver(BaseResolver):
 
     def resolve(self, name: str, repo: str, tag: str) -> AppLugManifest:
         return self._manifest
+
+    def list_tags(self, repo: str) -> list[str]:
+        return []
+
+    def fetch_text(self, repo: str, ref: str, path: str) -> str | None:
+        return None
 
 
 class _ErrorResolver(BaseResolver):
@@ -91,6 +102,12 @@ class _ErrorResolver(BaseResolver):
 
     def resolve(self, name: str, repo: str, tag: str) -> AppLugManifest:
         raise self._exc
+
+    def list_tags(self, repo: str) -> list[str]:
+        return []
+
+    def fetch_text(self, repo: str, ref: str, path: str) -> str | None:
+        return None
 
 
 def ok_resolvers(manifest: AppLugManifest = VALID_MANIFEST) -> dict[str, BaseResolver]:
@@ -262,6 +279,8 @@ def test_conflicting_matika_versions_fails(tmp_path):
             if name == "eyerate":
                 return AppLugManifest(id="eyerate", version="0.0.2", matika_version="0.0.2")
             return AppLugManifest(id="other", version="1.0.0", matika_version="0.0.1")
+        def list_tags(self, repo): return []
+        def fetch_text(self, repo, ref, path): return None
 
     recipe = {
         **VALID_RECIPE,
@@ -284,6 +303,8 @@ def test_identical_matika_versions_passes(tmp_path):
         def _raw_url(self, c, t, p): return ""
         def resolve(self, name, repo, tag):
             return AppLugManifest(id=name, version="0.0.2", matika_version="0.0.2")
+        def list_tags(self, repo): return []
+        def fetch_text(self, repo, ref, path): return None
 
     recipe = {
         **VALID_RECIPE,
@@ -508,3 +529,98 @@ def test_github_resolver_cache_case_insensitive():
 
     api_calls = [c for c in mock_get.call_args_list if "api.github.com" in c.args[0]]
     assert len(api_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# GitHubResolver: list_tags with Link: rel="next" pagination
+# ---------------------------------------------------------------------------
+
+def test_github_resolver_list_tags_paginates_link_header():
+    """Two-page pagination: page 1 has rel="next" Link, page 2 does not.
+
+    Asserts:
+      - tags from BOTH pages are returned
+      - first request includes per_page=100 in `params`
+      - second request uses the URL from the Link header verbatim and
+        passes params=None (the next URL already encodes page= and per_page=)
+    """
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+
+    resolver = GitHubResolver()
+
+    # Canonicalization step (unrelated to pagination).
+    canon_resp = _make_mock_response({"full_name": "manomatika/Matika"})
+
+    # Page 1: 2 tags + Link: rel="next" to page 2.
+    next_url = (
+        "https://api.github.com/repositories/12345/git/refs/tags"
+        "?page=2&per_page=100"
+    )
+    page1 = MagicMock()
+    page1.status_code = 200
+    page1.json.return_value = [
+        {"ref": "refs/tags/v0.0.1"},
+        {"ref": "refs/tags/v0.0.2"},
+    ]
+    page1.raise_for_status.return_value = None
+    page1.links = {"next": {"url": next_url, "rel": "next"}}
+
+    # Page 2: 2 more tags, no Link header (terminates the loop).
+    page2 = MagicMock()
+    page2.status_code = 200
+    page2.json.return_value = [
+        {"ref": "refs/tags/v0.0.3"},
+        {"ref": "refs/tags/v0.0.4"},
+    ]
+    page2.raise_for_status.return_value = None
+    page2.links = {}
+
+    responses = iter([canon_resp, page1, page2])
+    captured: list[tuple[str, dict]] = []
+
+    def fake_get(url, **kwargs):
+        captured.append((url, kwargs))
+        return next(responses)
+
+    with patch("requests.get", side_effect=fake_get):
+        tags = resolver.list_tags("github.com/manomatika/Matika")
+
+    assert tags == ["v0.0.1", "v0.0.2", "v0.0.3", "v0.0.4"]
+
+    tag_calls = [c for c in captured if "git/refs/tags" in c[0]]
+    assert len(tag_calls) == 2
+
+    # First call: base URL + per_page param.
+    first_url, first_kwargs = tag_calls[0]
+    assert "page=2" not in first_url
+    assert first_kwargs.get("params") == {"per_page": 100}
+
+    # Second call: full next URL from Link header, no params (URL embeds them).
+    second_url, second_kwargs = tag_calls[1]
+    assert second_url == next_url
+    assert second_kwargs.get("params") is None
+
+
+def test_github_resolver_list_tags_404_returns_empty():
+    """A 404 on the first page (zero-tag repo) returns []."""
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+
+    resolver = GitHubResolver()
+    canon_resp = _make_mock_response({"full_name": "manomatika/Matika"})
+    not_found = MagicMock()
+    not_found.status_code = 404
+    not_found.json.return_value = {}
+    not_found.raise_for_status.return_value = None
+    not_found.links = {}
+
+    responses = iter([canon_resp, not_found])
+
+    def fake_get(url, **kwargs):
+        return next(responses)
+
+    with patch("requests.get", side_effect=fake_get):
+        tags = resolver.list_tags("github.com/manomatika/Matika")
+
+    assert tags == []

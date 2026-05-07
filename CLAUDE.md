@@ -125,15 +125,45 @@ The defense is incomplete without code signing: unsigned installers can be modif
 
 ## Resolver Protocol
 
-`BaseResolver` is an ABC with a template-method `resolve(name, repo, tag) → AppLugManifest`. Subclasses implement `_canonicalize_repo()` and `_raw_url()`; `_parse_repo()` and `_fetch_json()` are shared. `GitHubResolver` is the only concrete implementation today; a future `RegistryResolver` drops in at the M4 registry milestone without changing `validate()` call sites.
+`BaseResolver` is an ABC with a template-method `resolve(name, repo, tag) → AppLugManifest`. Subclasses implement `_canonicalize_repo()` and `_raw_url()`; `_parse_repo()`, `_fetch_json()`, and `_fetch_text()` are shared. `GitHubResolver` is the only concrete implementation today; a future `RegistryResolver` drops in at the M4 registry milestone without changing `validate()` call sites.
+
+`BaseResolver` also requires two abstract release-log methods used by `validate_releases`:
+- `list_tags(repo) -> list[str]` — returns all git tag names (without the `refs/tags/` prefix). Resolvers whose host has no tag concept return `[]`.
+- `fetch_text(repo, ref, path) -> str | None` — returns the text content of `path` at `ref`, or `None` on 404. Resolvers whose host cannot serve arbitrary text files return `None` unconditionally.
+
+Both are `@abstractmethod` rather than no-op defaults: silent no-op defaults would let release-log drift go undetected if a subclass forgot to implement either method. The abstract decl forces every `BaseResolver` subclass — production resolvers and test mocks alike — to make an explicit choice.
 
 **Host dispatch** — `resolver_for(repo, allowed_hosts)` extracts the host from the repo string and looks it up in `_RESOLVER_REGISTRY`. Two distinct errors:
 - Host not in `allowed_hosts` → `PermissionError` → error pointer `applugs[i].repo: host "X" not in allowed_hosts`
 - Host in `allowed_hosts` but no registered resolver → `LookupError` → error pointer `applugs[i].repo: host "X" allowed but no resolver registered`
 
-**GitHubResolver specifics** — `raw.githubusercontent.com` is case-sensitive on owner/repo paths. `GitHubResolver._canonicalize_repo()` resolves canonical casing via the GitHub API (which is case-insensitive) and caches the result per-process — recipes with multiple applugs from the same org hit the API once.
+**GitHubResolver specifics** — `raw.githubusercontent.com` is case-sensitive on owner/repo paths. `GitHubResolver._canonicalize_repo()` resolves canonical casing via the GitHub API (which is case-insensitive) and caches the result per-process — recipes with multiple applugs from the same org hit the API once. `list_tags` calls `/repos/{owner}/{repo}/git/refs/tags` and follows `Link: rel="next"` pagination until exhausted (`per_page=100` per request, the API maximum). `fetch_text` reuses `_raw_url` + the shared `_fetch_text` helper.
 
 **Testing** — Tests inject `BaseResolver` subclasses via `validate(..., resolvers={"github.com": mock})` — no network hit. Mock resolvers must be genuine `BaseResolver` subclasses (not duck-typed) so interface changes are caught at test time.
+
+## Release Log Validation
+
+`ahimsa.validate_releases` enforces RELEASES.md ↔ git tag consistency for any repo that opts in by having a `RELEASES.md` at its root. The check is bidirectional:
+
+- Every git tag matching `vX.Y.Z` or `vX.Y.Z-PRERELEASE` MUST have a corresponding H2 entry in `RELEASES.md`.
+- Every H2 entry in `RELEASES.md` MUST correspond to an actual git tag.
+- Duplicate entries (same tag heading appearing twice) fail with a `releases.entry["<tag>"]: duplicate entry` error.
+
+**Opt-in by file presence.** If a repo has no `RELEASES.md`, the check is a no-op (zero errors). No flag, no allowlist — file presence is the only signal. Repos that have not adopted the convention are not penalized.
+
+**Audit point: HEAD, not the recipe's pinned tag.** The check fetches `RELEASES.md` and the tag list from the repo's default branch HEAD. When invoked transitively by `validate_recipe.validate(...)`, it asks "is this repo's release log currently consistent with its tag list?" — NOT "is the recipe's pinned snapshot consistent?". Drift in a repo's release log is worth flagging regardless of which tag the recipe pins. A future feature could add a `--at-ref <tag>` flag for historical audits.
+
+**Parser.** Strict line-based regex on H2 headings: `^##[ \t]+(v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)[ \t]*$`. The schema preamble at the top of `RELEASES.md` is informational and ignored. Headings with trailing junk (`## v0.0.4 (notes)`) deliberately do not match — the convention requires the heading IS the tag name. Code-fence state is not tracked (Phase B candidate if it ever bites).
+
+**Field-level validation is out of scope.** This validator's single invariant is tag↔entry presence. The `Date`, `Status`, `Artifact`, `PRs`, and `Summary` field formats are not parsed or checked. A separate `validate-entry-contents` check is a Phase B candidate.
+
+**Status values are invisible.** A tag whose entry has `Status: failed` or `Status: superseded` still satisfies the bidirectional rule. The validator does not interpret status semantics — that's the job of human readers.
+
+**Tag filtering.** Tags whose names do not match `^v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$` (e.g. `legacy-rev`, `release-1`) are ignored entirely; they neither require entries nor count as drift.
+
+**CLI.** `ahimsa-validate-releases <repo-spec>` runs the check standalone. Exit codes match the rest of ahimsa: 0 clean, 1 drift, 2 configuration error.
+
+**Transitive integration.** `ahimsa-validate <recipe>` invokes `validate_releases` for `matika.repo` and each `applugs[i].repo`. Errors flow into the same returned list with pointers like `matika.releases.tag["..."]` or `applugs[i].releases.entry["..."]`. This means a recipe-validation pass enforces release-log consistency across every repo the recipe pins.
 
 ## GitHub Actions Workflows
 

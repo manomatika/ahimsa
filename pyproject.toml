@@ -21,6 +21,7 @@ pattern = "(?P<version>[^\n]+)"
 
 [project.scripts]
 ahimsa-validate = "ahimsa.validate_recipe:main"
+ahimsa-validate-releases = "ahimsa.validate_releases:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ahimsa"]
