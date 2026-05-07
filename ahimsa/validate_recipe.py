@@ -103,6 +103,46 @@ class BaseResolver(ABC):
         resp.raise_for_status()
         return resp.json()
 
+    def _fetch_text(self, url: str) -> str | None:
+        """HTTP GET text content. Returns None on 404, raises on other errors.
+
+        Shared helper for subclasses that fetch arbitrary text files (e.g.
+        RELEASES.md). Mirrors `_fetch_json` but for non-JSON payloads.
+        """
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.text
+
+    # ----- Release-log support (used by ahimsa.validate_releases) -----
+
+    @abstractmethod
+    def list_tags(self, repo: str) -> list[str]:
+        """Return all git tag names (without `refs/tags/` prefix) for *repo*.
+
+        Concrete implementations enumerate tags from the host (e.g. via
+        the GitHub git-refs endpoint). Resolvers whose host has no tag
+        concept return [].
+
+        Required because subclasses that silently no-op on this surface
+        would let release-log drift go undetected — the abstract decl
+        forces every BaseResolver subclass to make an explicit choice.
+        """
+
+    @abstractmethod
+    def fetch_text(self, repo: str, ref: str, path: str) -> str | None:
+        """Fetch the text content of *path* at *ref* from *repo*.
+
+        Returns None on 404. Concrete implementations build the URL via
+        `_raw_url` and call the shared `_fetch_text` helper. Resolvers
+        whose host cannot serve arbitrary text files return None
+        unconditionally.
+
+        Required for the same reason as `list_tags` — silent no-ops on
+        this surface would mask drift.
+        """
+
 
 class GitHubResolver(BaseResolver):
     def __init__(self) -> None:
@@ -130,6 +170,49 @@ class GitHubResolver(BaseResolver):
     def _raw_url(self, canonical: tuple[str, str], tag: str, path: str) -> str:
         owner, repo = canonical
         return f"https://raw.githubusercontent.com/{owner}/{repo}/{tag}/{path}"
+
+    def list_tags(self, repo: str) -> list[str]:
+        owner, repo_name = self._parse_repo(repo)
+        canonical_owner, canonical_repo = self._canonicalize_repo(owner, repo_name)
+
+        # Follow GitHub's Link: rel="next" pagination until exhausted.
+        # per_page=100 is the maximum the API allows and minimizes round trips.
+        # The first request includes per_page in `params`; subsequent requests
+        # use the fully-formed URL from the Link header (it already encodes
+        # the page parameter).
+        url: str | None = (
+            f"https://api.github.com/repos/{canonical_owner}/{canonical_repo}/git/refs/tags"
+        )
+        params: dict | None = {"per_page": 100}
+        tags: list[str] = []
+
+        while url is not None:
+            resp = requests.get(
+                url,
+                timeout=10,
+                headers={"Accept": "application/vnd.github+json"},
+                params=params,
+            )
+            if resp.status_code == 404:
+                # Repo has zero tags → endpoint 404s on the first page.
+                return [] if not tags else tags
+            resp.raise_for_status()
+            refs = resp.json()
+            tags.extend(r["ref"].removeprefix("refs/tags/") for r in refs)
+
+            # `requests` parses the Link header into a dict-like structure.
+            # If a "next" link exists, follow it on the next iteration.
+            next_link = resp.links.get("next")
+            url = next_link["url"] if next_link else None
+            params = None  # next URL already includes its own page= param
+
+        return tags
+
+    def fetch_text(self, repo: str, ref: str, path: str) -> str | None:
+        owner, repo_name = self._parse_repo(repo)
+        canonical = self._canonicalize_repo(owner, repo_name)
+        url = self._raw_url(canonical, ref, path)
+        return self._fetch_text(url)
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +418,31 @@ def validate(
                 f"{ptr}.resolve",
                 f'applug.json matika_version "{manifest.matika_version}" does not match recipe matika_version "{plug["matika_version"]}"',
             ))
+
+    # --- Release-log audits (transitive validate_releases) ---
+    #
+    # IMPORTANT: validate_releases audits each repo's release log against its
+    # current tag list at HEAD — it does NOT audit at the recipe's pinned tag.
+    # The check asks "is this repo's release log currently consistent with its
+    # tag list?", regardless of which tag the recipe pins. Drift in a repo's
+    # release log is worth flagging regardless of recipe state. See
+    # CLAUDE.md "Release Log Validation" for the full rationale.
+    #
+    # Function-level import breaks the circular dependency: validate_releases
+    # imports BaseResolver/Error/resolver_for from this module.
+    from ahimsa.validate_releases import validate_releases as _validate_releases
+
+    if matika.get("repo"):
+        for e in _validate_releases(
+            matika["repo"], resolvers=resolvers, allowed_hosts=allowed_hosts,
+        ):
+            errors.append(Error(f"matika.{e.pointer}", e.message))
+
+    for i, plug in structurally_valid:
+        for e in _validate_releases(
+            plug["repo"], resolvers=resolvers, allowed_hosts=allowed_hosts,
+        ):
+            errors.append(Error(f"applugs[{i}].{e.pointer}", e.message))
 
     return errors
 
