@@ -139,7 +139,19 @@ Both are `@abstractmethod` rather than no-op defaults: silent no-op defaults wou
 
 **GitHubResolver specifics** — `raw.githubusercontent.com` is case-sensitive on owner/repo paths. `GitHubResolver._canonicalize_repo()` resolves canonical casing via the GitHub API (which is case-insensitive) and caches the result per-process — recipes with multiple applugs from the same org hit the API once. `list_tags` calls `/repos/{owner}/{repo}/git/refs/tags` and follows `Link: rel="next"` pagination until exhausted (`per_page=100` per request, the API maximum). `fetch_text` reuses `_raw_url` + the shared `_fetch_text` helper.
 
-**Testing** — Tests inject `BaseResolver` subclasses via `validate(..., resolvers={"github.com": mock})` — no network hit. Mock resolvers must be genuine `BaseResolver` subclasses (not duck-typed) so interface changes are caught at test time.
+**GitHub authentication** — `GitHubResolver.__init__` reads a token from the environment, with precedence `GITHUB_TOKEN` → `GH_TOKEN` (the gh-CLI legacy fallback). The token is stored as `self._token` and read once per resolver instance — mid-process env changes are not picked up. When a token is present, every outbound request from the resolver carries `Authorization: Bearer <token>`: the existence check, every paginated `list_tags` request, and the raw-content fetches via `_fetch_json` / `_fetch_text` (which consult `BaseResolver._request_headers()`, overridden on `GitHubResolver` to inject the auth header).
+
+When no token is set the resolver makes unauthenticated requests — public repos still work, private repos 404. The `_canonicalize_repo` 404 handler distinguishes the two cases by token presence: with a token, the message stays `repository "..." not found on GitHub`; without a token, it appends `(or no access — set GITHUB_TOKEN if this is a private repo)`. The hint is applied ONLY at `_canonicalize_repo` because `list_tags` 404 has a legitimate "zero tags" meaning (auth is upstream-disambiguated by `_canonicalize_repo`) and the raw-content 404s mean "file does not exist at this ref".
+
+The token value is never logged and never appears in any error message — only its env-var name is referenced in the auth hint. The token leaves the resolver only via the outbound `Authorization` header.
+
+**Testing** — Two tiers, both run offline by default:
+
+- **Unit tier** — `tests/test_validate_recipe.py`, `tests/test_validate_releases.py`. Tests inject `BaseResolver` subclasses via `validate(..., resolvers={"github.com": mock})` for protocol-contract checks, or patch `requests.get` directly to assert HTTP-layer details (headers, pagination, etc.). Mock resolvers must be genuine `BaseResolver` subclasses (not duck-typed) so interface changes are caught at test time.
+
+- **Integration tier** — `tests/test_github_resolver_integration.py`. Real `requests.get` calls against guaranteed-public GitHub repos (`octocat/Hello-World`). Catches transport-layer surprises that mocked tests cannot — e.g. the GitHub auth requirement that PR `manomatika/ahimsa#28` shipped without auth handling. Tests are marked `@pytest.mark.integration` and **excluded from the default `pytest tests/` run** via `addopts = "-m 'not integration'"` in `pyproject.toml`. Opt in with `pytest -m integration`.
+
+  The integration tier runs unauthenticated by design — every test repo it touches must be public. This guarantees the tier works in any developer environment without setup. If `GITHUB_TOKEN` happens to be set, the resolver attaches `Authorization` automatically; against public repos this is a no-op. The tests do not assume token presence or absence.
 
 ## Release Log Validation
 

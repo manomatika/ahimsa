@@ -624,3 +624,240 @@ def test_github_resolver_list_tags_404_returns_empty():
         tags = resolver.list_tags("github.com/manomatika/Matika")
 
     assert tags == []
+
+
+# ---------------------------------------------------------------------------
+# GitHubResolver: authentication via GITHUB_TOKEN / GH_TOKEN
+# ---------------------------------------------------------------------------
+
+# Sentinel for the leak test. Deliberately NOT prefixed with `ghp_` /
+# `github_pat_` / `ghs_` etc. — real PATs carry those prefixes, and a
+# leaked-token scanner could false-positive on the sentinel even though
+# it isn't a real token.
+_FAKE_TOKEN = "TEST_SENTINEL_NEVER_REAL_TOKEN"
+
+
+def _canon_response():
+    """200 response shaped like the GitHub canonicalization endpoint."""
+    return _make_mock_response({"full_name": "manomatika/Matika"})
+
+
+def _tags_404_response():
+    """404 response for the tags endpoint (zero-tag repo case)."""
+    resp = MagicMock()
+    resp.status_code = 404
+    resp.json.return_value = {"message": "Not Found"}
+    resp.raise_for_status.return_value = None
+    resp.links = {}
+    return resp
+
+
+def _raw_response():
+    """200 response shaped to satisfy both _fetch_json and _fetch_text callers."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.text = "content"
+    resp.json.return_value = {
+        "id": "matika", "version": "0.0.4", "matika_version": "0.0.4",
+    }
+    resp.raise_for_status.return_value = None
+    resp.links = {}
+    return resp
+
+
+def _route_response(url: str):
+    """Return a canned response shaped for *url*'s GitHub endpoint family."""
+    if "api.github.com/repos/" in url and "/git/refs/tags" not in url:
+        return _canon_response()
+    if "/git/refs/tags" in url:
+        return _tags_404_response()
+    return _raw_response()
+
+
+def _invoke_canonicalize(resolver):
+    resolver._canonicalize_repo("manomatika", "Matika")
+
+
+def _invoke_list_tags(resolver):
+    resolver.list_tags("github.com/manomatika/Matika")
+
+
+def _invoke_resolve(resolver):
+    resolver.resolve("matika", "github.com/manomatika/Matika", "v0.0.4")
+
+
+def _invoke_fetch_text(resolver):
+    resolver.fetch_text("github.com/manomatika/Matika", "HEAD", "RELEASES.md")
+
+
+_AUTH_INVOCATIONS = [
+    ("canonicalize", _invoke_canonicalize),
+    ("list_tags",    _invoke_list_tags),
+    ("resolve",      _invoke_resolve),
+    ("fetch_text",   _invoke_fetch_text),
+]
+
+
+@pytest.mark.parametrize("label,invoke", _AUTH_INVOCATIONS)
+def test_auth_header_present_when_token_set(monkeypatch, label, invoke):
+    """Every outbound request carries Authorization when a token is set.
+
+    Asserted across all four user-visible methods because each one routes
+    through a different combination of helpers (api.github.com endpoints,
+    raw.githubusercontent.com endpoints, paginated lists). Auth must be
+    consistent across all of them.
+    """
+    monkeypatch.setenv("GITHUB_TOKEN", _FAKE_TOKEN)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+
+    captured: list[dict] = []
+
+    def fake_get(url, **kwargs):
+        captured.append(kwargs)
+        return _route_response(url)
+
+    with patch("requests.get", side_effect=fake_get):
+        invoke(GitHubResolver())
+
+    assert captured, f"{label}: no requests captured"
+    for kwargs in captured:
+        headers = kwargs.get("headers") or {}
+        assert headers.get("Authorization") == f"Bearer {_FAKE_TOKEN}", (
+            f"{label}: missing or wrong Authorization in {headers}"
+        )
+
+
+@pytest.mark.parametrize("label,invoke", _AUTH_INVOCATIONS)
+def test_auth_header_absent_when_no_token(monkeypatch, label, invoke):
+    """No Authorization header on any outbound request when both env vars are unset."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+
+    captured: list[dict] = []
+
+    def fake_get(url, **kwargs):
+        captured.append(kwargs)
+        return _route_response(url)
+
+    with patch("requests.get", side_effect=fake_get):
+        invoke(GitHubResolver())
+
+    assert captured, f"{label}: no requests captured"
+    for kwargs in captured:
+        headers = kwargs.get("headers") or {}
+        assert "Authorization" not in headers, (
+            f"{label}: unexpected Authorization in {headers}"
+        )
+
+
+def test_github_token_wins_over_gh_token(monkeypatch):
+    """When both env vars are set, GITHUB_TOKEN takes precedence."""
+    monkeypatch.setenv("GITHUB_TOKEN", "primary_token")
+    monkeypatch.setenv("GH_TOKEN", "fallback_token")
+
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+
+    captured: list[dict] = []
+
+    def fake_get(url, **kwargs):
+        captured.append(kwargs)
+        return _canon_response()
+
+    with patch("requests.get", side_effect=fake_get):
+        GitHubResolver()._canonicalize_repo("manomatika", "Matika")
+
+    assert captured[0]["headers"]["Authorization"] == "Bearer primary_token"
+
+
+def test_gh_token_used_when_github_token_unset(monkeypatch):
+    """Fallback to GH_TOKEN when GITHUB_TOKEN is not set."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "fallback_token")
+
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+
+    captured: list[dict] = []
+
+    def fake_get(url, **kwargs):
+        captured.append(kwargs)
+        return _canon_response()
+
+    with patch("requests.get", side_effect=fake_get):
+        GitHubResolver()._canonicalize_repo("manomatika", "Matika")
+
+    assert captured[0]["headers"]["Authorization"] == "Bearer fallback_token"
+
+
+def test_canonicalize_404_no_token_suggests_setting_github_token(monkeypatch):
+    """A 404 with no token disambiguates as 'maybe private repo, set GITHUB_TOKEN'."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+
+    not_found = MagicMock()
+    not_found.status_code = 404
+    not_found.json.return_value = {"message": "Not Found"}
+    not_found.raise_for_status.return_value = None
+
+    with patch("requests.get", return_value=not_found):
+        with pytest.raises(LookupError) as exc:
+            GitHubResolver()._canonicalize_repo("manomatika", "Matika")
+
+    msg = str(exc.value)
+    assert "GITHUB_TOKEN" in msg
+    assert "no access" in msg
+    assert "private repo" in msg
+
+
+def test_canonicalize_404_with_token_does_not_suggest_setting_token(monkeypatch):
+    """A 404 with a token set means a real 'not found' — no auth hint."""
+    monkeypatch.setenv("GITHUB_TOKEN", _FAKE_TOKEN)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+
+    not_found = MagicMock()
+    not_found.status_code = 404
+    not_found.json.return_value = {"message": "Not Found"}
+    not_found.raise_for_status.return_value = None
+
+    with patch("requests.get", return_value=not_found):
+        with pytest.raises(LookupError) as exc:
+            GitHubResolver()._canonicalize_repo("manomatika", "Matika")
+
+    msg = str(exc.value)
+    assert "GITHUB_TOKEN" not in msg
+    assert "private repo" not in msg
+    assert "no access" not in msg
+    assert "not found" in msg
+
+
+def test_token_value_never_appears_in_error_messages(monkeypatch):
+    """Even on the 404 path that constructs error text, the token value must not leak."""
+    monkeypatch.setenv("GITHUB_TOKEN", _FAKE_TOKEN)
+
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+
+    not_found = MagicMock()
+    not_found.status_code = 404
+    not_found.json.return_value = {"message": "Not Found"}
+    not_found.raise_for_status.return_value = None
+
+    with patch("requests.get", return_value=not_found):
+        with pytest.raises(LookupError) as exc:
+            GitHubResolver()._canonicalize_repo("manomatika", "Matika")
+
+    assert _FAKE_TOKEN not in str(exc.value), "token sentinel leaked into str(exc)"
+    assert _FAKE_TOKEN not in repr(exc.value), "token sentinel leaked into repr(exc)"
