@@ -35,7 +35,9 @@ no ranges, no wildcards.
     "icon": "string — relative path to the .icns or .ico file"
   },
   "matika": {
-    "version": "string — exact Matika version this recipe targets (X.Y.Z)"
+    "version": "string — exact Matika version this recipe targets (X.Y.Z)",
+    "repo": "string — source repository in <host>/<owner>/<repo> form (e.g. github.com/manomatika/Matika)",
+    "tag": "string — git tag to check out (e.g. v0.0.4)"
   },
   "applugs": [
     {
@@ -65,7 +67,15 @@ no ranges, no wildcards.
 
 ## Validation Rules
 
-Run `python scripts/validate_recipe.py <path/to/recipe.json>` to validate.
+After installing ahimsa with `pip install -e ".[test]"`, run:
+
+```bash
+ahimsa-validate <path/to/recipe.json>
+# or, equivalently:
+python -m ahimsa.validate_recipe <path/to/recipe.json>
+```
+
+The earlier `scripts/validate_recipe.py` entry point no longer exists — the validator was reorganised into the installable `ahimsa` package.
 
 The following rules are enforced:
 
@@ -99,7 +109,7 @@ The following rules are enforced:
    }
    ```
 
-3. Run validation: `python scripts/validate_recipe.py recipes/<app>/recipe.json`
+3. Run validation: `ahimsa-validate recipes/<app>/recipe.json`
 
 4. Commit the updated recipe and push. The `validate.yml` GitHub Action will
    run automatically.
