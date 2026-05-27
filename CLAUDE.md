@@ -29,6 +29,62 @@ composed of one or more AppLugs.
 - Backward compatibility is mandatory — no breaking changes within 
   a matika minor version
 
+## Working Style & Discipline
+
+This section captures the standing working rules across the manomatika ecosystem. **CLAUDE.md is authoritative for how a fresh Claude Code instance should operate in this repo; keep it current as practices evolve.** The terminal milestone of every release is `Documentation & Release Readiness`, which includes auditing and updating every CLAUDE.md against what actually shipped.
+
+### Collaboration model
+
+- **Human in the loop for every change.** The user holds architecture, code review, and merge decisions. Don't merge PRs; don't push without explicit instruction; don't open PRs without the user's go-ahead.
+- **One question or command batch at a time.** When asking a question or proposing actions, stop and wait for the user's answer or for the user to read previous output before continuing. Don't paste a new prompt or run new commands on top of unreviewed output.
+- **Investigate-and-report before editing when scope is unclear.** Read the relevant code/docs first, surface what you find, and let the user direct the fix. Never assume; never silently expand scope.
+- **Push back on overthinking and scope creep.** Best-practice patterns, never papered-over hacks. Fix issues correctly now — except items the user has explicitly deferred (e.g. follow-on issues filed against a later milestone).
+- **Flag best-practice violations before implementing.** If a request would land an anti-pattern (security bypass, hack-around, etc.), surface the concern and let the user decide before writing code.
+
+### Git, branches, references, and worktrees
+
+- **The user does all git review and merges in the browser.** Don't merge PRs, push to main, or tag releases unless explicitly instructed.
+- **Don't stage or commit unless explicitly granted.** The user handles `git add` / `git commit` manually by default. When granted, follow the conventional-commit pattern (`docs:`, `fix:`, `feat:`, `refactor:`, etc.) and include `Closes manomatika/<repo>#N` (fully qualified) where applicable.
+- **Cross-repo issue/PR references must always be fully qualified.** Write `manomatika/matika#N`, `manomatika/eyerate#N`, `manomatika/ahimsa#N` — never a bare `#N` for an issue that lives in a different repo. Bare refs have caused real damage: a misqualified `Closes #11` / `Closes #12` in matika PR #35 closed unrelated issues in another repo's tracker. Bare refs are only safe when the PR and the issue are in the same repo.
+- **cc does not run `git merge` locally; never run `rm -rf`.** Integration of branches is done by the user via PR merge in the browser. For any local branch updates cc performs, use `git rebase` or `git cherry-pick`. Use targeted `git rm` if files must be removed.
+- **`VERSION` is the single source of truth** for version metadata in this repo. Never hand-edit version literals in other files; release tooling propagates from `VERSION`.
+- **The user uses git worktrees** for parallel work (e.g. `~/dev/projects/matika-45/` alongside `~/dev/projects/matika/` on a separate branch). At any moment, the user may be operating in any of several working directories for the same repo. Always check the current branch (`git branch --show-current`) and confirm it matches what you expect before assuming.
+- **Multi-instance/parallel discipline.** When operating as one of multiple parallel cc instances, stay strictly within the assigned worktree, branch, and scope of files described in the task. Do not modify files outside the assigned scope, even if issues are noticed elsewhere — surface those issues to the user as separate items to triage rather than fixing in-flight. Cross-cutting changes that touch another agent's work area must be coordinated by the user, not initiated unilaterally.
+
+### Code and test discipline
+
+- **Regression tests are required for every fix.** A bug fix that doesn't include a test that would have caught the bug isn't done.
+- **All tests must pass — 0 failed, 0 skipped, 0 xfail.** No exceptions without explicit user approval. In multi-repo changes, every affected repo's full suite must pass before any PR is opened.
+- **Never weaken or disable security / correctness checks** (CSRF, permission, auth, validation) as a workaround. If a check is producing a wrong answer, fix the call site to satisfy it correctly — never bypass.
+
+### Repository ecosystem
+
+- **manomatika** is the GitHub org. Three repos compose the ecosystem:
+  - **manomatika/Matika** — the framework (plugin-agnostic FastAPI host)
+  - **manomatika/EyeRate** — the reference AppLug (financial security tracking)
+  - **manomatika/ahimsa** — release / build / recipe-validation tooling
+- Local clones live at `~/dev/projects/<repo>/` (sibling directories). Additional worktrees for the same repo live at `~/dev/projects/<repo>-<branch>/`.
+
+### Milestones, Project, and dates
+
+- **Milestone naming is shared and match-when-present** across repos. When a milestone exists in more than one repo, its title is byte-for-byte identical so the org Project rolls it up into a single cross-repo group. Milestone names never contain version numbers or dates.
+- **Canonical milestone titles in the current release cycle:**
+  - `Deployment & Install`
+  - `Cleanup & Tooling`
+  - `Registry` (ahimsa only)
+  - `Signing & Distribution` (ahimsa only)
+  - `QA & System Test` (ahimsa only)
+  - `v0.0.5 Planning` (eyerate + ahimsa)
+  - `Documentation & Release Readiness` — the terminal release gate (all three)
+- **Org-level Project: [ManoMatika Roadmap](https://github.com/orgs/manomatika/projects/1)** is the cross-repo backlog view. Its description records which component versions compose each manomatika release (e.g. ManoMatika v0.0.1 = matika v0.0.4 + eyerate v0.0.4 + ahimsa v0.0.1).
+- **Milestone due dates are the single source of truth for dates.** The roadmap renders timelines from milestone Markers; do NOT create per-item date fields on the Project for scheduling (Pattern A — milestone-driven).
+
+### Communication and output
+
+- **Put prompts and commands in code blocks** so the user can one-tap copy them.
+- The user is on **macOS / iTerm2** (tmux planned). Shell defaults to zsh.
+- The user is **expert in software architecture and engineering, novice in git/GitHub specifics.** When git or `gh` commands appear in plans or output, explain plainly what they do, what they touch, and what the user will see.
+
 ## Recipes
 
 - Recipes live at `recipes/<app>/recipe.json`. One directory per application. Asset paths inside the recipe (e.g. `application.icon`) are relative to the recipe's directory, not the repo root.
@@ -211,9 +267,9 @@ The token value is never logged and never appears in any error message — only 
 
 ## Standing Rules
 
-- Never git merge, never rm -rf
-- All recipe changes must pass validate.yml before merge
-- Exact version pins only in recipe.json — never ranges
-- recipe.json is the sole source of truth for what ships
+General working discipline (tests, git, security checks, cross-repo refs, etc.) lives in the *Working Style & Discipline* section at the top of this file. The bullets below are ahimsa-specific.
+
+- All recipe changes must pass `validate.yml` before merge.
+- Exact version pins only in `recipe.json` — never ranges.
+- `recipe.json` is the sole source of truth for what ships.
 - Standard Python `.gitignore` (GitHub's official Python template) is in place: covers `__pycache__/`, build/dist, `*.egg-info/`, `.pytest_cache/`, `.coverage`, `htmlcov/`, venv variants, `.tox/`, installer artifacts (`*.dmg`, `*.exe`, etc.), and OS/IDE noise. Never commit compiled artifacts.
-- **Cross-repo issue references must be fully qualified.** In PR bodies and commit messages, always write `manomatika/ahimsa#N` (or `manomatika/Matika#N`, etc.) — never a bare `#N` — when the issue lives in a different repo than the PR. GitHub resolves bare `#N` relative to the repo where the PR is opened, silently auto-closing the wrong issues. Bare references are only safe when the PR and the issue are in the same repo.
