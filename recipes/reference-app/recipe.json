@@ -8,12 +8,12 @@
   "matika": {
     "version": "0.0.4",
     "tag": "v0.0.4",
-    "repo": "github.com/pjtallman/Matika"
+    "repo": "github.com/manomatika/Matika"
   },
   "applugs": [
     {
       "name": "eyerate",
-      "repo": "github.com/pjtallman/EyeRate",
+      "repo": "github.com/manomatika/EyeRate",
       "version": "0.0.4",
       "matika_version": "0.0.4",
       "tag": "v0.0.4"

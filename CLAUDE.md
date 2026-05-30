@@ -93,8 +93,8 @@ This section captures the standing working rules across the manomatika ecosystem
 ## Current Recipe
 
 recipes/reference-app/recipe.json — Matika Reference Application
-- matika 0.0.4 from github.com/pjtallman/Matika
-- eyerate 0.0.4 from github.com/pjtallman/EyeRate
+- matika 0.0.4 from github.com/manomatika/Matika
+- eyerate 0.0.4 from github.com/manomatika/EyeRate
 
 ## Package Layout
 
