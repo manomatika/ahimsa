@@ -411,7 +411,7 @@ jobs:
           lines = [
               f"## {name} v{version}",
               "",
-              f"Built with [Matika](https://github.com/pjtallman/Matika) {matika_v}.",
+              f"Built with [Matika](https://github.com/manomatika/Matika) {matika_v}.",
               "",
               "**AppLugs included:**",
           ]
