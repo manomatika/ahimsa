@@ -141,14 +141,31 @@ jobs:
           echo "PyInstaller output:"
           ls -la dist
 
-      - name: TODO — run dmgbuild
+      - name: Build DMG (dmgbuild)
         shell: bash
+        env:
+          APP_SLUG: ${{ steps.recipe_info.outputs.app_slug }}
+          APP_NAME: ${{ steps.recipe_info.outputs.app_name }}
+          APP_VERSION: ${{ steps.recipe_info.outputs.app_version }}
+          MATIKA_VERSION: ${{ steps.recipe_info.outputs.matika_version }}
+          DMG_ARCH: arm64
         run: |
-          echo "TODO: dmgbuild not yet implemented (PR 2 / Wave 3) — will wrap"
-          echo "build/matika/dist/Matika-<version>.app into a signed DMG here."
-          # Placeholder artifact so the upload step does not fail during the
-          # stub phase. Replaced by the real DMG when dmgbuild lands.
-          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg"
+          # Wrap the PyInstaller .app bundle in a DMG via the dmgbuild library.
+          # The .app is named Matika-<matika_version>.app by matika.spec; the
+          # DMG filename follows ahimsa's convention <slug>-<app_version>-macos-<arch>.dmg.
+          APP_BUNDLE="build/matika/dist/Matika-${MATIKA_VERSION}.app"
+          DMG_NAME="${APP_SLUG}-${APP_VERSION}-macos-${DMG_ARCH}.dmg"
+          if [ ! -d "$APP_BUNDLE" ]; then
+            echo "::error::Expected app bundle not found: $APP_BUNDLE"
+            ls -la build/matika/dist || true
+            exit 1
+          fi
+          python3 scripts/make_dmg.py \
+            --app "$APP_BUNDLE" \
+            --volname "${APP_NAME} ${APP_VERSION}" \
+            --output "$DMG_NAME"
+          echo "Built DMG:"
+          ls -la "$DMG_NAME"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -264,14 +281,31 @@ jobs:
           echo "PyInstaller output:"
           ls -la dist
 
-      - name: TODO — run dmgbuild
+      - name: Build DMG (dmgbuild)
         shell: bash
+        env:
+          APP_SLUG: ${{ steps.recipe_info.outputs.app_slug }}
+          APP_NAME: ${{ steps.recipe_info.outputs.app_name }}
+          APP_VERSION: ${{ steps.recipe_info.outputs.app_version }}
+          MATIKA_VERSION: ${{ steps.recipe_info.outputs.matika_version }}
+          DMG_ARCH: x86_64
         run: |
-          echo "TODO: dmgbuild not yet implemented (PR 2 / Wave 3) — will wrap"
-          echo "build/matika/dist/Matika-<version>.app into a signed DMG here."
-          # Placeholder artifact so the upload step does not fail during the
-          # stub phase. Replaced by the real DMG when dmgbuild lands.
-          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-x86_64.dmg"
+          # Wrap the PyInstaller .app bundle in a DMG via the dmgbuild library.
+          # The .app is named Matika-<matika_version>.app by matika.spec; the
+          # DMG filename follows ahimsa's convention <slug>-<app_version>-macos-<arch>.dmg.
+          APP_BUNDLE="build/matika/dist/Matika-${MATIKA_VERSION}.app"
+          DMG_NAME="${APP_SLUG}-${APP_VERSION}-macos-${DMG_ARCH}.dmg"
+          if [ ! -d "$APP_BUNDLE" ]; then
+            echo "::error::Expected app bundle not found: $APP_BUNDLE"
+            ls -la build/matika/dist || true
+            exit 1
+          fi
+          python3 scripts/make_dmg.py \
+            --app "$APP_BUNDLE" \
+            --volname "${APP_NAME} ${APP_VERSION}" \
+            --output "$DMG_NAME"
+          echo "Built DMG:"
+          ls -la "$DMG_NAME"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -387,14 +421,38 @@ jobs:
           echo "PyInstaller output:"
           ls -la dist
 
-      - name: TODO — run Inno Setup
-        shell: bash
+      - name: Build Windows installer (Inno Setup)
+        shell: cmd
+        env:
+          APP_SLUG: ${{ steps.recipe_info.outputs.app_slug }}
+          APP_NAME: ${{ steps.recipe_info.outputs.app_name }}
+          APP_VERSION: ${{ steps.recipe_info.outputs.app_version }}
+          MATIKA_VERSION: ${{ steps.recipe_info.outputs.matika_version }}
         run: |
-          echo "TODO: Inno Setup not yet implemented (PR 2 / Wave 3) — will wrap"
-          echo "build/matika/dist/Matika-<version>/ into a Windows installer here."
-          # Placeholder artifact so the upload step does not fail during the
-          # stub phase. Replaced by the real installer when Inno Setup lands.
-          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe"
+          @echo off
+          REM Inno Setup is preinstalled on the windows-latest runner image (ISCC
+          REM on PATH). It packages PyInstaller's one-dir output:
+          REM   build\matika\dist\Matika-<matika_version>\  (whole directory tree)
+          REM into a single installer EXE. All values are passed in as /D defines
+          REM so the .iss script carries no hardcoded version or path — AppVersion
+          REM and the source bundle are dynamic per the recipe.
+          set "BUNDLE_DIR=build\matika\dist\Matika-%MATIKA_VERSION%"
+          set "OUTPUT_BASENAME=%APP_SLUG%-%APP_VERSION%-windows-x86_64"
+          if not exist "%BUNDLE_DIR%" (
+            echo ::error::Expected PyInstaller bundle dir not found: %BUNDLE_DIR%
+            dir build\matika\dist
+            exit /b 1
+          )
+          ISCC ^
+            /DMyAppName="%APP_NAME%" ^
+            /DMyAppVersion="%APP_VERSION%" ^
+            /DMyMatikaVersion="%MATIKA_VERSION%" ^
+            /DMyBundleDir="%BUNDLE_DIR%" ^
+            /DMyOutputDir="." ^
+            /DMyOutputBaseName="%OUTPUT_BASENAME%" ^
+            installer\windows_installer.iss
+          if errorlevel 1 exit /b 1
+          dir "%OUTPUT_BASENAME%.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -470,6 +528,24 @@ jobs:
                   f"- **{plug['name']}** v{plug['version']} "
                   f"(matika_version: {plug['matika_version']})"
               )
+          # Known-limitation block — unsigned installers (manomatika/ahimsa#26).
+          # Hardcoded for the v0.0.4 cycle; a templated "known limitations"
+          # section can replace this once code signing lands (M5). Preserved on
+          # every regeneration because it is emitted unconditionally here.
+          lines += [
+              "",
+              "## Known limitation: unsigned installers",
+              "",
+              "**v0.0.4 installers are not code-signed.** macOS will trigger "
+              "Gatekeeper warnings (\"can't be opened because Apple cannot check "
+              "it for malicious software\"); Windows will trigger SmartScreen "
+              "warnings. Installers can be modified in transit without detection. "
+              "Code signing and notarization are tracked in "
+              "[M5 — Code Signing & Distribution Security]"
+              "(https://github.com/manomatika/ahimsa/milestone/10) and will land "
+              "in a later release. **Do not distribute these installers to "
+              "external users.**",
+          ]
           with open("release_notes.md", "w") as f:
               f.write("\n".join(lines) + "\n")
           print("Release notes:")
