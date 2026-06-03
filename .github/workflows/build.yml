@@ -27,11 +27,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: pip install requests
+      - name: Install ahimsa
+        run: pip install -e .
 
       - name: Validate recipe (fail fast)
-        run: python3 scripts/validate_recipe.py "$RECIPE_PATH"
+        run: ahimsa-validate "$RECIPE_PATH"
 
   # ---------------------------------------------------------------------------
   # BUILD — macOS Apple Silicon (macos-14)
@@ -70,6 +70,11 @@ jobs:
           version     = r["application"]["version"]
           matika_v    = r["matika"]["version"]
           matika_repo = r["matika"]["repo"]
+          # The recipe pins matika by explicit tag (recipe.matika.tag), the
+          # same way each applug is pinned by its own tag. Use it directly
+          # rather than deriving "v{version}" so the recipe stays the single
+          # source of truth for what gets checked out.
+          matika_tag  = r["matika"]["tag"]
           if not matika_repo.startswith("http"):
               matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
@@ -79,9 +84,10 @@ jobs:
               f.write(f"app_version={version}\n")
               f.write(f"matika_version={matika_v}\n")
               f.write(f"matika_repo={matika_repo}\n")
+              f.write(f"matika_tag={matika_tag}\n")
           print(f"App      : {name} v{version}")
           print(f"Slug     : {slug}")
-          print(f"Matika   : {matika_v}")
+          print(f"Matika   : {matika_v} ({matika_tag})")
           print(f"Repo     : {matika_repo}")
           PYEOF
 
@@ -89,7 +95,7 @@ jobs:
         shell: bash
         run: |
           MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
-          MATIKA_TAG="v${{ steps.recipe_info.outputs.matika_version }}"
+          MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
           echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
           git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
 
@@ -122,17 +128,27 @@ jobs:
           npm install
           npm run build
 
-      - name: TODO — run PyInstaller
+      - name: Run PyInstaller (freeze Matika.app)
         shell: bash
+        working-directory: build/matika
         run: |
-          echo "TODO: pyinstaller not yet implemented — will produce dist/Matika.app here"
-          # Placeholder artifact so upload step does not fail during stub phase
-          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg"
+          # matika.spec reads its own VERSION file and emits
+          # dist/Matika-<version>.app plus the dist/Matika-<version>/ COLLECT
+          # tree. Plugins cloned into plugins/ are bundled by launcher.py at
+          # first run, not by the spec. Run from the cloned matika root so the
+          # spec's SPEC-relative paths (src/, launcher.py, VERSION) resolve.
+          pyinstaller matika.spec --noconfirm
+          echo "PyInstaller output:"
+          ls -la dist
 
       - name: TODO — run dmgbuild
         shell: bash
         run: |
-          echo "TODO: dmgbuild not yet implemented — will wrap dist/Matika.app into a signed DMG here"
+          echo "TODO: dmgbuild not yet implemented (PR 2 / Wave 3) — will wrap"
+          echo "build/matika/dist/Matika-<version>.app into a signed DMG here."
+          # Placeholder artifact so the upload step does not fail during the
+          # stub phase. Replaced by the real DMG when dmgbuild lands.
+          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -177,6 +193,11 @@ jobs:
           version     = r["application"]["version"]
           matika_v    = r["matika"]["version"]
           matika_repo = r["matika"]["repo"]
+          # The recipe pins matika by explicit tag (recipe.matika.tag), the
+          # same way each applug is pinned by its own tag. Use it directly
+          # rather than deriving "v{version}" so the recipe stays the single
+          # source of truth for what gets checked out.
+          matika_tag  = r["matika"]["tag"]
           if not matika_repo.startswith("http"):
               matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
@@ -186,9 +207,10 @@ jobs:
               f.write(f"app_version={version}\n")
               f.write(f"matika_version={matika_v}\n")
               f.write(f"matika_repo={matika_repo}\n")
+              f.write(f"matika_tag={matika_tag}\n")
           print(f"App      : {name} v{version}")
           print(f"Slug     : {slug}")
-          print(f"Matika   : {matika_v}")
+          print(f"Matika   : {matika_v} ({matika_tag})")
           print(f"Repo     : {matika_repo}")
           PYEOF
 
@@ -196,7 +218,7 @@ jobs:
         shell: bash
         run: |
           MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
-          MATIKA_TAG="v${{ steps.recipe_info.outputs.matika_version }}"
+          MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
           echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
           git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
 
@@ -229,16 +251,27 @@ jobs:
           npm install
           npm run build
 
-      - name: TODO — run PyInstaller
+      - name: Run PyInstaller (freeze Matika.app)
         shell: bash
+        working-directory: build/matika
         run: |
-          echo "TODO: pyinstaller not yet implemented — will produce dist/Matika.app here"
-          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-x86_64.dmg"
+          # matika.spec reads its own VERSION file and emits
+          # dist/Matika-<version>.app plus the dist/Matika-<version>/ COLLECT
+          # tree. Plugins cloned into plugins/ are bundled by launcher.py at
+          # first run, not by the spec. Run from the cloned matika root so the
+          # spec's SPEC-relative paths (src/, launcher.py, VERSION) resolve.
+          pyinstaller matika.spec --noconfirm
+          echo "PyInstaller output:"
+          ls -la dist
 
       - name: TODO — run dmgbuild
         shell: bash
         run: |
-          echo "TODO: dmgbuild not yet implemented — will wrap dist/Matika.app into a signed DMG here"
+          echo "TODO: dmgbuild not yet implemented (PR 2 / Wave 3) — will wrap"
+          echo "build/matika/dist/Matika-<version>.app into a signed DMG here."
+          # Placeholder artifact so the upload step does not fail during the
+          # stub phase. Replaced by the real DMG when dmgbuild lands.
+          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-x86_64.dmg"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -283,6 +316,11 @@ jobs:
           version     = r["application"]["version"]
           matika_v    = r["matika"]["version"]
           matika_repo = r["matika"]["repo"]
+          # The recipe pins matika by explicit tag (recipe.matika.tag), the
+          # same way each applug is pinned by its own tag. Use it directly
+          # rather than deriving "v{version}" so the recipe stays the single
+          # source of truth for what gets checked out.
+          matika_tag  = r["matika"]["tag"]
           if not matika_repo.startswith("http"):
               matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
@@ -292,9 +330,10 @@ jobs:
               f.write(f"app_version={version}\n")
               f.write(f"matika_version={matika_v}\n")
               f.write(f"matika_repo={matika_repo}\n")
+              f.write(f"matika_tag={matika_tag}\n")
           print(f"App      : {name} v{version}")
           print(f"Slug     : {slug}")
-          print(f"Matika   : {matika_v}")
+          print(f"Matika   : {matika_v} ({matika_tag})")
           print(f"Repo     : {matika_repo}")
           PYEOF
 
@@ -302,7 +341,7 @@ jobs:
         shell: bash
         run: |
           MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
-          MATIKA_TAG="v${{ steps.recipe_info.outputs.matika_version }}"
+          MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
           echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
           git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
 
@@ -335,16 +374,27 @@ jobs:
           npm install
           npm run build
 
-      - name: TODO — run PyInstaller
+      - name: Run PyInstaller (freeze Matika.exe)
         shell: bash
+        working-directory: build/matika
         run: |
-          echo "TODO: pyinstaller not yet implemented — will produce dist/Matika.exe here"
-          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe"
+          # matika.spec reads its own VERSION file and emits the
+          # dist/Matika-<version>/ COLLECT tree containing Matika-<version>.exe.
+          # Plugins cloned into plugins/ are bundled by launcher.py at first
+          # run, not by the spec. Run from the cloned matika root so the spec's
+          # SPEC-relative paths (src/, launcher.py, VERSION) resolve.
+          pyinstaller matika.spec --noconfirm
+          echo "PyInstaller output:"
+          ls -la dist
 
       - name: TODO — run Inno Setup
         shell: bash
         run: |
-          echo "TODO: Inno Setup not yet implemented — will wrap dist/Matika.exe into a Windows installer here"
+          echo "TODO: Inno Setup not yet implemented (PR 2 / Wave 3) — will wrap"
+          echo "build/matika/dist/Matika-<version>/ into a Windows installer here."
+          # Placeholder artifact so the upload step does not fail during the
+          # stub phase. Replaced by the real installer when Inno Setup lands.
+          touch "${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
