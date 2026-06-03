@@ -305,3 +305,62 @@ def test_release_notes_q3_fallback_on_missing_file(workflow):
     runs = _job_run_blocks(workflow["jobs"]["release"])
     # Q3 fallback emits a minimal body when no per-tag file is found.
     assert "No release notes file found for this tag" in runs
+
+
+def test_release_job_validates_releases_log(workflow):
+    """The release job must run ahimsa-validate-releases to catch drift before publishing."""
+    runs = _job_run_blocks(workflow["jobs"]["release"])
+    assert "ahimsa-validate-releases" in runs
+
+
+# ---------------------------------------------------------------------------
+# workflow_dispatch refresh-releases-md job
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_releases_md_job_exists(workflow):
+    """The refresh-releases-md job must exist in the workflow."""
+    assert "refresh-releases-md" in workflow["jobs"]
+
+
+def test_refresh_releases_md_only_runs_on_workflow_dispatch(workflow):
+    """The refresh-releases-md job must only run on workflow_dispatch.
+
+    It must never run on tag push — that would risk an erroneous push
+    that bypasses PR review.
+    """
+    job = workflow["jobs"]["refresh-releases-md"]
+    cond = job["if"]
+    assert "workflow_dispatch" in cond
+    # Must NOT fire on push events — guard against accidental PR opens on tag push.
+    assert "push" not in cond
+
+
+def test_refresh_releases_md_opens_pr_not_direct_push(workflow):
+    """The refresh job must open a PR, not push directly to main.
+
+    Pushing directly to main would bypass code review and silently update
+    the central release log without a review step.
+    """
+    job = workflow["jobs"]["refresh-releases-md"]
+    runs = _job_run_blocks(job)
+    # Must use gh pr create to open a PR.
+    assert "gh pr create" in runs
+    # Must NOT push directly to main.
+    assert "push origin main" not in runs
+    assert "push origin master" not in runs
+
+
+def test_refresh_releases_md_uses_render_script(workflow):
+    """The refresh job must run the render script, not inline rendering logic."""
+    job = workflow["jobs"]["refresh-releases-md"]
+    runs = _job_run_blocks(job)
+    assert "render_releases_md.py" in runs
+
+
+def test_refresh_releases_md_has_pr_write_permission(workflow):
+    """The refresh job needs contents: write and pull-requests: write permissions."""
+    job = workflow["jobs"]["refresh-releases-md"]
+    perms = job.get("permissions", {})
+    assert perms.get("contents") == "write"
+    assert perms.get("pull-requests") == "write"
