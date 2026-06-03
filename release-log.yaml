@@ -1,0 +1,95 @@
+entries:
+  - repo: matika
+    tag: v0.0.4-dev.2
+    date: "2026-05-07"
+    status: published
+    artifact: "@manomatika/matika-frontend@0.0.4-dev.2 (GitHub Packages)"
+    prs: "manomatika/matika#37"
+    summary: >
+      Adds the import map entry for @manomatika/matika-frontend in matika's
+      base.html. Applugs (eyerate first) can now import the package via bare
+      specifier; matika owns the URL mapping centrally so applugs do not
+      hardcode /static/js/index.js. Package contents are unchanged from
+      v0.0.4-dev.1 — the bump exists for ecosystem version coherence under the
+      convention that committed-tree changes get their own prerelease-bumped tag.
+
+  - repo: matika
+    tag: v0.0.4-dev.1
+    date: "2026-05-06"
+    status: published
+    artifact: "@manomatika/matika-frontend@0.0.4-dev.1 (GitHub Packages)"
+    prs: "manomatika/matika@23de78d (direct-to-main lockfile fix; no PR opened)"
+    summary: >
+      First successful publish of @manomatika/matika-frontend. Establishes
+      the public TypeScript surface for applugs to consume: MaintenanceActivityManager,
+      ActivityMetadata, getCsrfToken, injectCsrfToken. Tagged from a direct-to-main
+      commit that committed the previously-missing package-lock.json. Future lockfile
+      changes must follow standard branch + PR discipline.
+
+  - repo: matika
+    tag: v0.0.4-dev.0
+    date: "2026-05-06"
+    status: "superseded (by matika v0.0.4-dev.1)"
+    artifact: "none (publish failed; breadcrumb only)"
+    prs: "manomatika/matika#35"
+    summary: >
+      First attempted publish of @manomatika/matika-frontend. The publish
+      workflow failed in npm ci because package-lock.json was not committed to
+      the repository. Tag retained as audit breadcrumb; superseded by v0.0.4-dev.1
+      which committed the lockfile and republished successfully.
+
+  - repo: matika
+    tag: v0.0.3
+    date: "2026-04-28"
+    status: published
+    artifact: "none (pre-RELEASES.md historical release)"
+    prs: "(pre-RELEASES.md historical release)"
+    summary: "Pre-RELEASES.md historical release. See git log for commit details."
+
+  - repo: matika
+    tag: v0.0.2
+    date: "2026-04-27"
+    status: published
+    artifact: "none (pre-RELEASES.md historical release)"
+    prs: "(pre-RELEASES.md historical release)"
+    summary: "Pre-RELEASES.md historical release. See git log for commit details."
+
+  - repo: matika
+    tag: v0.0.1
+    date: "2026-04-18"
+    status: published
+    artifact: "none (pre-RELEASES.md historical release)"
+    prs: "(pre-RELEASES.md historical release)"
+    summary: "Pre-RELEASES.md historical release. See git log for commit details."
+
+  - repo: eyerate
+    tag: v0.0.3
+    date: "2026-04-28"
+    status: published
+    artifact: "none (placeholder)"
+    prs: "(placeholder — to be filled)"
+    summary: "Placeholder entry. Summary to be filled before v0.0.1 release."
+
+  - repo: eyerate
+    tag: v0.0.2
+    date: "2026-04-27"
+    status: published
+    artifact: "none (placeholder)"
+    prs: "(placeholder — to be filled)"
+    summary: "Placeholder entry. Summary to be filled before v0.0.1 release."
+
+  - repo: eyerate
+    tag: v0.0.1
+    date: "2026-04-18"
+    status: published
+    artifact: "none (placeholder)"
+    prs: "(placeholder — to be filled)"
+    summary: "Placeholder entry. Summary to be filled before v0.0.1 release."
+
+  - repo: ahimsa
+    tag: v0.0.1
+    date: "(pending)"
+    status: "(pending — tag not yet pushed)"
+    artifact: "none (pending)"
+    prs: "(pending)"
+    summary: "Placeholder entry for ahimsa v0.0.1. To be filled at release time."
