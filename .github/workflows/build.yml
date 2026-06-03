@@ -510,12 +510,14 @@ jobs:
         run: |
           python3 - <<'PYEOF'
           import json, os
+          from pathlib import Path
           path = os.environ["RECIPE_PATH"]
           with open(path) as f:
               r = json.load(f)
           name     = r["application"]["name"]
           version  = r["application"]["version"]
           matika_v = r["matika"]["version"]
+          # Dynamic header lines (recipe-derived).
           lines = [
               f"## {name} v{version}",
               "",
@@ -528,24 +530,24 @@ jobs:
                   f"- **{plug['name']}** v{plug['version']} "
                   f"(matika_version: {plug['matika_version']})"
               )
-          # Known-limitation block — unsigned installers (manomatika/ahimsa#26).
-          # Hardcoded for the v0.0.4 cycle; a templated "known limitations"
-          # section can replace this once code signing lands (M5). Preserved on
-          # every regeneration because it is emitted unconditionally here.
-          lines += [
-              "",
-              "## Known limitation: unsigned installers",
-              "",
-              "**v0.0.4 installers are not code-signed.** macOS will trigger "
-              "Gatekeeper warnings (\"can't be opened because Apple cannot check "
-              "it for malicious software\"); Windows will trigger SmartScreen "
-              "warnings. Installers can be modified in transit without detection. "
-              "Code signing and notarization are tracked in "
-              "[M5 — Code Signing & Distribution Security]"
-              "(https://github.com/manomatika/ahimsa/milestone/10) and will land "
-              "in a later release. **Do not distribute these installers to "
-              "external users.**",
-          ]
+          # Per-tag release notes file (§8.4-A Q4 hybrid).
+          # Derive the tag from the git ref: GITHUB_REF_NAME is set by Actions.
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          notes_file = Path(f"docs/release-notes/{tag}.md")
+          if notes_file.exists():
+              # Append the static per-release notes from the versioned file.
+              static_text = notes_file.read_text()
+              lines.append(static_text.rstrip("\n"))
+          else:
+              # Q3 fallback: no per-tag file found; emit a minimal body.
+              lines += [
+                  "",
+                  f"## {name} v{version}",
+                  "",
+                  f"Built with Matika {matika_v}.",
+                  "",
+                  "No release notes file found for this tag.",
+              ]
           with open("release_notes.md", "w") as f:
               f.write("\n".join(lines) + "\n")
           print("Release notes:")

@@ -268,16 +268,40 @@ def test_release_job_creates_github_release(workflow):
 
 
 def test_release_notes_include_unsigned_limitation(workflow):
-    """#26: release notes must carry the unsigned-installer known limitation."""
-    runs = _job_run_blocks(workflow["jobs"]["release"])
-    assert "not code-signed" in runs
-    assert "Gatekeeper" in runs
-    assert "SmartScreen" in runs
+    """#26: release notes must carry the unsigned-installer known limitation.
+
+    The static text now lives in docs/release-notes/v0.0.4.md (§8.4-A Q4
+    hybrid). This test verifies the file exists and contains the expected
+    prose rather than checking the workflow run-block, because the text was
+    migrated out of the heredoc.
+    """
+    notes_file = REPO_ROOT / "docs" / "release-notes" / "v0.0.4.md"
+    assert notes_file.is_file(), "docs/release-notes/v0.0.4.md must exist"
+    notes_text = notes_file.read_text()
+    assert "not code-signed" in notes_text
+    assert "Gatekeeper" in notes_text
+    assert "SmartScreen" in notes_text
     # Links to the code-signing milestone.
-    assert "milestone/10" in runs
+    assert "milestone/10" in notes_text
 
 
 def test_release_notes_list_applugs_from_recipe(workflow):
+    """The applug list is still job-generated from recipe data (stays in the heredoc)."""
     runs = _job_run_blocks(workflow["jobs"]["release"])
     assert "AppLugs included" in runs
     assert 'r["applugs"]' in runs
+
+
+def test_release_notes_reads_per_tag_file_from_docs(workflow):
+    """The Generate release notes step reads docs/release-notes/{tag}.md (Q4 hybrid)."""
+    runs = _job_run_blocks(workflow["jobs"]["release"])
+    # The step must read from docs/release-notes/ using the tag.
+    assert "docs/release-notes/" in runs
+    assert "notes_file" in runs or "notes_file.exists()" in runs or ".exists()" in runs
+
+
+def test_release_notes_q3_fallback_on_missing_file(workflow):
+    """The Generate release notes step has a Q3 fallback when no per-tag file exists."""
+    runs = _job_run_blocks(workflow["jobs"]["release"])
+    # Q3 fallback emits a minimal body when no per-tag file is found.
+    assert "No release notes file found for this tag" in runs
