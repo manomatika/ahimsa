@@ -11,9 +11,14 @@ manomatika/ahimsa#9, #10 and manomatika/matika#26:
     clones applugs into build/matika/plugins/, runs the npm build, and
     invokes `pyinstaller matika.spec`
 
-dmgbuild / Inno Setup / the release job are explicitly out of scope for this
-PR (deferred to Wave 3 / PR 2) and are intentionally NOT asserted to be
-implemented here — they remain stubs.
+The Wave 3 / PR 2 packaging + release work (manomatika/ahimsa#13, #14, #17,
+#18, #26; tracked by manomatika/matika#29, #30, #31) is now implemented and
+asserted here too:
+  - macOS build jobs wrap the .app in a DMG via dmgbuild (no TODO stub left)
+  - the Windows job runs Inno Setup against the one-dir bundle (no TODO stub)
+  - the release job is tag-triggered ONLY (not workflow_dispatch, not PR),
+    downloads all three artifacts, and emits release notes that include the
+    unsigned-installer known-limitation block.
 """
 
 from pathlib import Path
@@ -23,10 +28,13 @@ import pytest
 yaml = pytest.importorskip("yaml")
 
 WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "build.yml"
+REPO_ROOT = Path(__file__).parent.parent
+ISS_FILE = REPO_ROOT / "installer" / "windows_installer.iss"
 
 # Platform build jobs that must each run the full clone → npm → pyinstaller
 # foundation. The release job is excluded — it has no build steps.
 BUILD_JOBS = ["build-macos-arm", "build-macos-intel", "build-windows"]
+MACOS_BUILD_JOBS = ["build-macos-arm", "build-macos-intel"]
 
 
 @pytest.fixture(scope="module")
@@ -125,3 +133,151 @@ def test_pyinstaller_runs_in_cloned_matika_dir(workflow, job_name):
         assert step.get("working-directory") == "build/matika", (
             f"{job_name} must run pyinstaller from build/matika"
         )
+
+
+# ---------------------------------------------------------------------------
+# Packaging — macOS DMG (manomatika/ahimsa#13, #14; manomatika/matika#29)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("job_name", MACOS_BUILD_JOBS)
+def test_macos_job_builds_dmg_not_stub(workflow, job_name):
+    """Each macOS job must produce a real DMG via dmgbuild, no TODO stub."""
+    job = workflow["jobs"][job_name]
+    runs = _job_run_blocks(job)
+    # The PyInstaller .app is wrapped by the make_dmg helper (dmgbuild lib).
+    assert "scripts/make_dmg.py" in runs, (
+        f"{job_name} must invoke the make_dmg dmgbuild helper"
+    )
+    # No `touch <name>.dmg` placeholder may remain.
+    assert "touch " not in runs, f"{job_name} still touches a placeholder DMG"
+    # No remaining dmgbuild TODO step.
+    assert not any(
+        name.lstrip().startswith("TODO") and "dmgbuild" in name
+        for name in _step_names(job)
+    ), f"{job_name} still has a TODO dmgbuild stub"
+
+
+def test_macos_dmg_filenames_follow_arch_convention(workflow):
+    """arm64 job sets DMG_ARCH=arm64; intel job sets DMG_ARCH=x86_64, and the
+    DMG name interpolates the arch so the artifacts match agent-E's upload
+    names (<slug>-<version>-macos-<arch>.dmg)."""
+    arm_step = _dmg_build_step(workflow, "build-macos-arm")
+    intel_step = _dmg_build_step(workflow, "build-macos-intel")
+    assert arm_step["env"]["DMG_ARCH"] == "arm64"
+    assert intel_step["env"]["DMG_ARCH"] == "x86_64"
+    assert "macos-${DMG_ARCH}" in arm_step["run"]
+    assert "macos-${DMG_ARCH}" in intel_step["run"]
+
+
+def _dmg_build_step(workflow: dict, job_name: str) -> dict:
+    for step in workflow["jobs"][job_name]["steps"]:
+        if "make_dmg.py" in step.get("run", ""):
+            return step
+    raise AssertionError(f"{job_name} has no DMG build step")
+
+
+def test_make_dmg_helper_exists():
+    assert (REPO_ROOT / "scripts" / "make_dmg.py").is_file()
+    assert (REPO_ROOT / "scripts" / "_dmg_settings.py").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Packaging — Windows installer (manomatika/ahimsa#17, #18; manomatika/matika#30)
+# ---------------------------------------------------------------------------
+def test_windows_job_runs_inno_setup_not_stub(workflow):
+    job = workflow["jobs"]["build-windows"]
+    runs = _job_run_blocks(job)
+    assert "ISCC" in runs, "windows job must invoke Inno Setup compiler (ISCC)"
+    assert "windows_installer.iss" in runs
+    assert "touch " not in runs, "windows job still touches a placeholder exe"
+    assert not any(
+        name.lstrip().startswith("TODO") and "Inno" in name
+        for name in _step_names(job)
+    ), "windows job still has a TODO Inno Setup stub"
+
+
+def test_iss_file_exists():
+    assert ISS_FILE.is_file(), "windows_installer.iss must exist"
+
+
+def test_iss_packages_directory_bundle_recursively():
+    """#17: the [Files] section must recurse the whole one-dir bundle."""
+    text = ISS_FILE.read_text()
+    assert "recursesubdirs" in text, "iss must recurse the bundle directory"
+    assert "createallsubdirs" in text
+    # Source globs the bundle dir, not a single exe.
+    assert "{#MyBundleDir}\\*" in text
+
+
+def test_iss_appversion_is_dynamic():
+    """#17: AppVersion must come from a define, never a hardcoded literal."""
+    text = ISS_FILE.read_text()
+    assert "AppVersion={#MyAppVersion}" in text, (
+        "AppVersion must be driven by the MyAppVersion define"
+    )
+
+
+def test_windows_job_passes_version_defines_to_iscc(workflow):
+    runs = _job_run_blocks(workflow["jobs"]["build-windows"])
+    # Version + path are passed as /D defines so the iss stays recipe-driven.
+    assert "/DMyAppVersion=" in runs
+    assert "/DMyBundleDir=" in runs
+
+
+# ---------------------------------------------------------------------------
+# Release job (manomatika/matika#31, manomatika/ahimsa#26)
+# ---------------------------------------------------------------------------
+def test_release_job_is_tag_triggered_only(workflow):
+    """The release job MUST run only on tag push — never on dispatch or PR.
+
+    This is the single most important guard: a misfire would publish a
+    GitHub release on a workflow_dispatch test run or (if the trigger set
+    ever grows a pull_request event) on a PR.
+    """
+    job = workflow["jobs"]["release"]
+    cond = job["if"]
+    assert "github.event_name == 'push'" in cond
+    assert "startsWith(github.ref, 'refs/tags/')" in cond
+
+
+def test_workflow_trigger_excludes_pull_request(workflow):
+    """build.yml must not be PR-triggered (would let the gate fire early)."""
+    # PyYAML maps the bare `on:` key to the boolean True (the Norway problem).
+    triggers = workflow.get(True, workflow.get("on"))
+    assert triggers is not None, "could not locate the workflow `on:` block"
+    assert "pull_request" not in triggers, (
+        "build.yml must not run on pull_request"
+    )
+    assert "workflow_dispatch" in triggers
+    assert "push" in triggers
+
+
+def test_release_job_downloads_all_three_artifacts(workflow):
+    job = workflow["jobs"]["release"]
+    # Depends on all three platform build jobs.
+    assert set(job["needs"]) == set(BUILD_JOBS)
+    steps = job["steps"]
+    assert any(
+        "download-artifact" in (s.get("uses") or "") for s in steps
+    ), "release job must download build artifacts"
+
+
+def test_release_job_creates_github_release(workflow):
+    runs = _job_run_blocks(workflow["jobs"]["release"])
+    assert "gh release create" in runs
+    assert "release_notes.md" in runs
+
+
+def test_release_notes_include_unsigned_limitation(workflow):
+    """#26: release notes must carry the unsigned-installer known limitation."""
+    runs = _job_run_blocks(workflow["jobs"]["release"])
+    assert "not code-signed" in runs
+    assert "Gatekeeper" in runs
+    assert "SmartScreen" in runs
+    # Links to the code-signing milestone.
+    assert "milestone/10" in runs
+
+
+def test_release_notes_list_applugs_from_recipe(workflow):
+    runs = _job_run_blocks(workflow["jobs"]["release"])
+    assert "AppLugs included" in runs
+    assert 'r["applugs"]' in runs
