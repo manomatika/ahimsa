@@ -21,9 +21,9 @@ jobs:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -43,13 +43,13 @@ jobs:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -135,7 +135,7 @@ jobs:
           echo "TODO: dmgbuild not yet implemented — will wrap dist/Matika.app into a signed DMG here"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg
           path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg
@@ -150,13 +150,13 @@ jobs:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -241,7 +241,7 @@ jobs:
           echo "TODO: dmgbuild not yet implemented — will wrap dist/Matika.app into a signed DMG here"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-x86_64.dmg
           path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-x86_64.dmg
@@ -256,13 +256,13 @@ jobs:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -347,7 +347,7 @@ jobs:
           echo "TODO: Inno Setup not yet implemented — will wrap dist/Matika.exe into a Windows installer here"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe
           path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe
@@ -364,9 +364,9 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -390,7 +390,7 @@ jobs:
           PYEOF
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
