@@ -13,7 +13,8 @@ requires-python = ">=3.11"
 dependencies = ["requests"]
 
 [project.optional-dependencies]
-test = ["pytest"]
+# pyyaml: parse .github/workflows/*.yml in the build-workflow structural tests.
+test = ["pytest", "pyyaml"]
 
 [tool.hatch.version]
 path = "VERSION"
