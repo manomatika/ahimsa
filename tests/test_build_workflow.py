@@ -268,16 +268,99 @@ def test_release_job_creates_github_release(workflow):
 
 
 def test_release_notes_include_unsigned_limitation(workflow):
-    """#26: release notes must carry the unsigned-installer known limitation."""
-    runs = _job_run_blocks(workflow["jobs"]["release"])
-    assert "not code-signed" in runs
-    assert "Gatekeeper" in runs
-    assert "SmartScreen" in runs
+    """#26: release notes must carry the unsigned-installer known limitation.
+
+    The static text now lives in docs/release-notes/v0.0.4.md (§8.4-A Q4
+    hybrid). This test verifies the file exists and contains the expected
+    prose rather than checking the workflow run-block, because the text was
+    migrated out of the heredoc.
+    """
+    notes_file = REPO_ROOT / "docs" / "release-notes" / "v0.0.4.md"
+    assert notes_file.is_file(), "docs/release-notes/v0.0.4.md must exist"
+    notes_text = notes_file.read_text()
+    assert "not code-signed" in notes_text
+    assert "Gatekeeper" in notes_text
+    assert "SmartScreen" in notes_text
     # Links to the code-signing milestone.
-    assert "milestone/10" in runs
+    assert "milestone/10" in notes_text
 
 
 def test_release_notes_list_applugs_from_recipe(workflow):
+    """The applug list is still job-generated from recipe data (stays in the heredoc)."""
     runs = _job_run_blocks(workflow["jobs"]["release"])
     assert "AppLugs included" in runs
     assert 'r["applugs"]' in runs
+
+
+def test_release_notes_reads_per_tag_file_from_docs(workflow):
+    """The Generate release notes step reads docs/release-notes/{tag}.md (Q4 hybrid)."""
+    runs = _job_run_blocks(workflow["jobs"]["release"])
+    # The step must read from docs/release-notes/ using the tag.
+    assert "docs/release-notes/" in runs
+    assert "notes_file" in runs or "notes_file.exists()" in runs or ".exists()" in runs
+
+
+def test_release_notes_q3_fallback_on_missing_file(workflow):
+    """The Generate release notes step has a Q3 fallback when no per-tag file exists."""
+    runs = _job_run_blocks(workflow["jobs"]["release"])
+    # Q3 fallback emits a minimal body when no per-tag file is found.
+    assert "No release notes file found for this tag" in runs
+
+
+def test_release_job_validates_releases_log(workflow):
+    """The release job must run ahimsa-validate-releases to catch drift before publishing."""
+    runs = _job_run_blocks(workflow["jobs"]["release"])
+    assert "ahimsa-validate-releases" in runs
+
+
+# ---------------------------------------------------------------------------
+# workflow_dispatch refresh-releases-md job
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_releases_md_job_exists(workflow):
+    """The refresh-releases-md job must exist in the workflow."""
+    assert "refresh-releases-md" in workflow["jobs"]
+
+
+def test_refresh_releases_md_only_runs_on_workflow_dispatch(workflow):
+    """The refresh-releases-md job must only run on workflow_dispatch.
+
+    It must never run on tag push — that would risk an erroneous push
+    that bypasses PR review.
+    """
+    job = workflow["jobs"]["refresh-releases-md"]
+    cond = job["if"]
+    assert "workflow_dispatch" in cond
+    # Must NOT fire on push events — guard against accidental PR opens on tag push.
+    assert "push" not in cond
+
+
+def test_refresh_releases_md_opens_pr_not_direct_push(workflow):
+    """The refresh job must open a PR, not push directly to main.
+
+    Pushing directly to main would bypass code review and silently update
+    the central release log without a review step.
+    """
+    job = workflow["jobs"]["refresh-releases-md"]
+    runs = _job_run_blocks(job)
+    # Must use gh pr create to open a PR.
+    assert "gh pr create" in runs
+    # Must NOT push directly to main.
+    assert "push origin main" not in runs
+    assert "push origin master" not in runs
+
+
+def test_refresh_releases_md_uses_render_script(workflow):
+    """The refresh job must run the render script, not inline rendering logic."""
+    job = workflow["jobs"]["refresh-releases-md"]
+    runs = _job_run_blocks(job)
+    assert "render_releases_md.py" in runs
+
+
+def test_refresh_releases_md_has_pr_write_permission(workflow):
+    """The refresh job needs contents: write and pull-requests: write permissions."""
+    job = workflow["jobs"]["refresh-releases-md"]
+    perms = job.get("permissions", {})
+    assert perms.get("contents") == "write"
+    assert perms.get("pull-requests") == "write"

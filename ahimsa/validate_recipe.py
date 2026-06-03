@@ -468,19 +468,29 @@ def validate(
     # release log is worth flagging regardless of recipe state. See
     # CLAUDE.md "Release Log Validation" for the full rationale.
     #
+    # The central RELEASES.md lives in ahimsa at github.com/manomatika/ahimsa.
+    # When tests inject resolvers, those resolvers also serve the ahimsa entry.
+    # The recipe's allowed_hosts is NOT passed here: it governs which hosts the
+    # recipe may reference, not which hosts ahimsa's own infrastructure uses.
+    # Using allowed_hosts=None preserves the default ["github.com"] so the
+    # ahimsa RELEASES.md fetch always works regardless of a restrictive recipe
+    # config (e.g. a recipe that only allows "test.invalid").
+    #
     # Function-level import breaks the circular dependency: validate_releases
     # imports BaseResolver/Error/resolver_for from this module.
     from ahimsa.validate_releases import validate_releases as _validate_releases
 
+    _releases_allowed = None if resolvers is None else allowed_hosts
+
     if matika.get("repo"):
         for e in _validate_releases(
-            matika["repo"], resolvers=resolvers, allowed_hosts=allowed_hosts,
+            [matika["repo"]], resolvers=resolvers, allowed_hosts=_releases_allowed,
         ):
             errors.append(Error(f"matika.{e.pointer}", e.message))
 
     for i, plug in structurally_valid:
         for e in _validate_releases(
-            plug["repo"], resolvers=resolvers, allowed_hosts=allowed_hosts,
+            [plug["repo"]], resolvers=resolvers, allowed_hosts=_releases_allowed,
         ):
             errors.append(Error(f"applugs[{i}].{e.pointer}", e.message))
 
