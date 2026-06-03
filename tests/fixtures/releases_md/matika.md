@@ -1,11 +1,15 @@
 <!--
-Snapshot of manomatika/matika RELEASES.md as of 2026-05-07 at commit
-ef8470dae0f29bc95dda30fccd86da12e9ffec73 (merge of manomatika/matika#36).
+Snapshot of the central ahimsa RELEASES.md (matika entries only) as of 2026-05-07,
+representing matika tags v0.0.4-dev.0 and v0.0.4-dev.1.
+
+Updated from the old single-repo heading format (## v0.0.4-dev.1) to the new
+two-part format (## matika v0.0.4-dev.1) when the central RELEASES.md moved
+to ahimsa (PR feat/release-notes-system).
 
 Do not auto-sync. This fixture is intentionally frozen to prevent test
 flakiness as matika's release log evolves. The corresponding test
 asserts that this snapshot's tag list (v0.0.4-dev.0, v0.0.4-dev.1)
-round-trips cleanly through validate_releases — that is the invariant
+round-trips cleanly through validate_releases -- that is the invariant
 being tested, NOT matika's current state.
 
 When matika ships future tags (v0.0.4-dev.2, v0.0.4, ...), this fixture
@@ -15,19 +19,13 @@ changes in a way that this real-world test should reflect.
 
 # Releases
 
-Canonical log of every git tag pushed from this repository and its
-corresponding published artifact. Every tag of the form `vX.Y.Z` or
-`vX.Y.Z-PRERELEASE` has an entry below. Failed-publish tags are kept
-as breadcrumbs; an entry's `Status` is updated to `superseded` once a
-successor tag publishes successfully (failure context moves into the
-Summary).
-
-The tag↔entry consistency rule is enforced by ahimsa's release-log
-validation. Entries are listed newest-first.
+Canonical log of every git tag pushed from component repositories.
+Entries use the form ``## <repo-slug> <tag>`` so a single file serves
+all repos in the ecosystem.
 
 ---
 
-## v0.0.4-dev.1
+## matika v0.0.4-dev.1
 
 - **Date:** 2026-05-06
 - **Status:** published
@@ -40,10 +38,10 @@ validation. Entries are listed newest-first.
   the previously-missing `package-lock.json`. Future lockfile changes
   must follow standard branch + PR discipline.
 
-## v0.0.4-dev.0
+## matika v0.0.4-dev.0
 
 - **Date:** 2026-05-06
-- **Status:** superseded (by v0.0.4-dev.1)
+- **Status:** superseded (by matika v0.0.4-dev.1)
 - **Artifact:** none (publish failed; breadcrumb only)
 - **PRs:** manomatika/matika#35
 - **Summary:** First attempted publish of `@manomatika/matika-frontend`.
