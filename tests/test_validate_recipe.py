@@ -42,13 +42,13 @@ VALID_RECIPE: dict = {
     },
     "matika": {
         "version": "0.0.2",
-        "repo": "github.com/pjtallman/Matika",
+        "repo": "github.com/pjtallman/matika",
         "tag": "v0.0.2",
     },
     "applugs": [
         {
             "name": "eyerate",
-            "repo": "github.com/pjtallman/EyeRate",
+            "repo": "github.com/pjtallman/eyerate",
             "version": "0.0.2",
             "matika_version": "0.0.2",
             "tag": "v0.0.2",
@@ -285,7 +285,7 @@ def test_conflicting_matika_versions_fails(tmp_path):
     recipe = {
         **VALID_RECIPE,
         "applugs": [
-            {"name": "eyerate", "repo": "github.com/pjtallman/EyeRate",
+            {"name": "eyerate", "repo": "github.com/pjtallman/eyerate",
              "version": "0.0.2", "matika_version": "0.0.2", "tag": "v0.0.2"},
             {"name": "other", "repo": "github.com/pjtallman/Other",
              "version": "1.0.0", "matika_version": "0.0.1", "tag": "v1.0.0"},
@@ -309,7 +309,7 @@ def test_identical_matika_versions_passes(tmp_path):
     recipe = {
         **VALID_RECIPE,
         "applugs": [
-            {"name": "eyerate", "repo": "github.com/pjtallman/EyeRate",
+            {"name": "eyerate", "repo": "github.com/pjtallman/eyerate",
              "version": "0.0.2", "matika_version": "0.0.2", "tag": "v0.0.2"},
             {"name": "other", "repo": "github.com/pjtallman/Other",
              "version": "0.0.2", "matika_version": "0.0.2", "tag": "v0.0.2"},
@@ -365,7 +365,7 @@ def test_repo_not_found_fails(tmp_path):
     errors = validate(
         path,
         resolvers={"github.com": _ErrorResolver(
-            LookupError('repository "pjtallman/EyeRate" not found on GitHub')
+            LookupError('repository "pjtallman/eyerate" not found on GitHub')
         )},
     )
     assert any("repo" in e.pointer for e in errors)
@@ -550,7 +550,7 @@ def test_github_resolver_list_tags_paginates_link_header():
     resolver = GitHubResolver()
 
     # Canonicalization step (unrelated to pagination).
-    canon_resp = _make_mock_response({"full_name": "manomatika/Matika"})
+    canon_resp = _make_mock_response({"full_name": "manomatika/matika"})
 
     # Page 1: 2 tags + Link: rel="next" to page 2.
     next_url = (
@@ -584,7 +584,7 @@ def test_github_resolver_list_tags_paginates_link_header():
         return next(responses)
 
     with patch("requests.get", side_effect=fake_get):
-        tags = resolver.list_tags("github.com/manomatika/Matika")
+        tags = resolver.list_tags("github.com/manomatika/matika")
 
     assert tags == ["v0.0.1", "v0.0.2", "v0.0.3", "v0.0.4"]
 
@@ -608,7 +608,7 @@ def test_github_resolver_list_tags_404_returns_empty():
     vr._repo_cache.clear()
 
     resolver = GitHubResolver()
-    canon_resp = _make_mock_response({"full_name": "manomatika/Matika"})
+    canon_resp = _make_mock_response({"full_name": "manomatika/matika"})
     not_found = MagicMock()
     not_found.status_code = 404
     not_found.json.return_value = {}
@@ -621,7 +621,7 @@ def test_github_resolver_list_tags_404_returns_empty():
         return next(responses)
 
     with patch("requests.get", side_effect=fake_get):
-        tags = resolver.list_tags("github.com/manomatika/Matika")
+        tags = resolver.list_tags("github.com/manomatika/matika")
 
     assert tags == []
 
@@ -639,7 +639,7 @@ _FAKE_TOKEN = "TEST_SENTINEL_NEVER_REAL_TOKEN"
 
 def _canon_response():
     """200 response shaped like the GitHub canonicalization endpoint."""
-    return _make_mock_response({"full_name": "manomatika/Matika"})
+    return _make_mock_response({"full_name": "manomatika/matika"})
 
 
 def _tags_404_response():
@@ -675,19 +675,19 @@ def _route_response(url: str):
 
 
 def _invoke_canonicalize(resolver):
-    resolver._canonicalize_repo("manomatika", "Matika")
+    resolver._canonicalize_repo("manomatika", "matika")
 
 
 def _invoke_list_tags(resolver):
-    resolver.list_tags("github.com/manomatika/Matika")
+    resolver.list_tags("github.com/manomatika/matika")
 
 
 def _invoke_resolve(resolver):
-    resolver.resolve("matika", "github.com/manomatika/Matika", "v0.0.4")
+    resolver.resolve("matika", "github.com/manomatika/matika", "v0.0.4")
 
 
 def _invoke_fetch_text(resolver):
-    resolver.fetch_text("github.com/manomatika/Matika", "HEAD", "RELEASES.md")
+    resolver.fetch_text("github.com/manomatika/matika", "HEAD", "RELEASES.md")
 
 
 _AUTH_INVOCATIONS = [
@@ -771,7 +771,7 @@ def test_github_token_wins_over_gh_token(monkeypatch):
         return _canon_response()
 
     with patch("requests.get", side_effect=fake_get):
-        GitHubResolver()._canonicalize_repo("manomatika", "Matika")
+        GitHubResolver()._canonicalize_repo("manomatika", "matika")
 
     assert captured[0]["headers"]["Authorization"] == "Bearer primary_token"
 
@@ -791,7 +791,7 @@ def test_gh_token_used_when_github_token_unset(monkeypatch):
         return _canon_response()
 
     with patch("requests.get", side_effect=fake_get):
-        GitHubResolver()._canonicalize_repo("manomatika", "Matika")
+        GitHubResolver()._canonicalize_repo("manomatika", "matika")
 
     assert captured[0]["headers"]["Authorization"] == "Bearer fallback_token"
 
@@ -811,7 +811,7 @@ def test_canonicalize_404_no_token_suggests_setting_github_token(monkeypatch):
 
     with patch("requests.get", return_value=not_found):
         with pytest.raises(LookupError) as exc:
-            GitHubResolver()._canonicalize_repo("manomatika", "Matika")
+            GitHubResolver()._canonicalize_repo("manomatika", "matika")
 
     msg = str(exc.value)
     assert "GITHUB_TOKEN" in msg
@@ -834,7 +834,7 @@ def test_canonicalize_404_with_token_does_not_suggest_setting_token(monkeypatch)
 
     with patch("requests.get", return_value=not_found):
         with pytest.raises(LookupError) as exc:
-            GitHubResolver()._canonicalize_repo("manomatika", "Matika")
+            GitHubResolver()._canonicalize_repo("manomatika", "matika")
 
     msg = str(exc.value)
     assert "GITHUB_TOKEN" not in msg
@@ -857,7 +857,7 @@ def test_token_value_never_appears_in_error_messages(monkeypatch):
 
     with patch("requests.get", return_value=not_found):
         with pytest.raises(LookupError) as exc:
-            GitHubResolver()._canonicalize_repo("manomatika", "Matika")
+            GitHubResolver()._canonicalize_repo("manomatika", "matika")
 
     assert _FAKE_TOKEN not in str(exc.value), "token sentinel leaked into str(exc)"
     assert _FAKE_TOKEN not in repr(exc.value), "token sentinel leaked into repr(exc)"
