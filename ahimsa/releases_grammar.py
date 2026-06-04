@@ -27,7 +27,7 @@ def slug_from_repo(repo_spec: str) -> str:
 
     Examples:
         'github.com/manomatika/matika' -> 'matika'
-        'github.com/manomatika/Matika' -> 'matika'  (lowercased defensively)
+        'github.com/manomatika/matika' -> 'matika'  (lowercased defensively)
 
     The slug is the last path segment, lowercased. After the org migration
     (#38-early) repo names are expected to be lowercase; the defensive lower()

@@ -36,7 +36,7 @@ no ranges, no wildcards.
   },
   "matika": {
     "version": "string — exact Matika version this recipe targets (X.Y.Z)",
-    "repo": "string — source repository in <host>/<owner>/<repo> form (e.g. github.com/manomatika/Matika)",
+    "repo": "string — source repository in <host>/<owner>/<repo> form (e.g. github.com/manomatika/matika)",
     "tag": "string — git tag to check out (e.g. v0.0.4)"
   },
   "applugs": [

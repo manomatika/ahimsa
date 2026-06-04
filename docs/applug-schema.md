@@ -78,11 +78,11 @@ form.
 
 | Form | Valid? |
 |---|---|
-| `github.com/manomatika/Matika` | ✓ |
-| `https://github.com/manomatika/Matika` | ✗ — no scheme allowed |
-| `github.com/manomatika/Matika.git` | ✗ — trailing `.git` not allowed |
-| `git@github.com:manomatika/Matika.git` | ✗ — SSH form not allowed |
-| `manomatika/Matika` | ✗ — host component required |
+| `github.com/manomatika/matika` | ✓ |
+| `https://github.com/manomatika/matika` | ✗ — no scheme allowed |
+| `github.com/manomatika/matika.git` | ✗ — trailing `.git` not allowed |
+| `git@github.com:manomatika/matika.git` | ✗ — SSH form not allowed |
+| `manomatika/matika` | ✗ — host component required |
 
 The host component must appear in `allowed_hosts` (see below) or the validator
 rejects the recipe.
