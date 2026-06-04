@@ -209,29 +209,41 @@ The token value is never logged and never appears in any error message — only 
 
   The integration tier runs unauthenticated by design — every test repo it touches must be public. This guarantees the tier works in any developer environment without setup. If `GITHUB_TOKEN` happens to be set, the resolver attaches `Authorization` automatically; against public repos this is a no-op. The tests do not assume token presence or absence.
 
-## Release Log Validation
+## Release-Notes System & Central Release Log
 
-`ahimsa.validate_releases` enforces RELEASES.md ↔ git tag consistency for any repo that opts in by having a `RELEASES.md` at its root. The check is bidirectional:
+ahimsa hosts the **manomatika-wide release log** and the release-notes machinery for the whole ecosystem. This replaced the older per-repo `RELEASES.md` convention (matika's own `RELEASES.md` was deleted; its entries were migrated here).
 
-- Every git tag matching `vX.Y.Z` or `vX.Y.Z-PRERELEASE` MUST have a corresponding H2 entry in `RELEASES.md`.
-- Every H2 entry in `RELEASES.md` MUST correspond to an actual git tag.
-- Duplicate entries (same tag heading appearing twice) fail with a `releases.entry["<tag>"]: duplicate entry` error.
+### `RELEASES.md` is a GENERATED artifact
 
-**Opt-in by file presence.** If a repo has no `RELEASES.md`, the check is a no-op (zero errors). No flag, no allowlist — file presence is the only signal. Repos that have not adopted the convention are not penalized.
+`RELEASES.md` at ahimsa's repo root is the single, ecosystem-wide audit log covering tags across **all three repos** (matika, eyerate, ahimsa). **It is generated — do NOT hand-edit `RELEASES.md`.** The human-edited source of truth is **`release-log.yaml`** at ahimsa's repo root.
 
-**Audit point: HEAD, not the recipe's pinned tag.** The check fetches `RELEASES.md` and the tag list from the repo's default branch HEAD. When invoked transitively by `validate_recipe.validate(...)`, it asks "is this repo's release log currently consistent with its tag list?" — NOT "is the recipe's pinned snapshot consistent?". Drift in a repo's release log is worth flagging regardless of which tag the recipe pins. A future feature could add a `--at-ref <tag>` flag for historical audits.
+- **`release-log.yaml`** — one record per `(repo, tag)` with the non-derivable, human-curated fields: `summary`, `status` (incl. `superseded_by`), `prs`, `artifact`, `date`. **Edit this file**, then regenerate `RELEASES.md`.
+- **Renderer** (`ahimsa/release_log.py` + `scripts/render_releases_md.py`) — merges `release-log.yaml` with live cross-repo tag data and renders `RELEASES.md` newest-first, with `## <repo> <tag>` headings. A live tag with no YAML record produces a templated placeholder entry plus a warning so a human backfills it. Run `python scripts/render_releases_md.py` before opening a release PR; commit the regenerated `RELEASES.md` in the same PR.
+- **Live cross-repo tag query is STUBBED** (Q16b). `ahimsa/stub_resolver.py::StubTagResolver` returns injected tag data; the live `GitHubResolver` cross-repo query is **wired in manomatika/ahimsa#49** (still open — blocker #38-early now satisfied). Until #49 lands, the renderer runs against the stub.
 
-**Parser.** Strict line-based regex on H2 headings: `^##[ \t]+(v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)[ \t]*$`. The schema preamble at the top of `RELEASES.md` is informational and ignored. Headings with trailing junk (`## v0.0.4 (notes)`) deliberately do not match — the convention requires the heading IS the tag name. Code-fence state is not tracked (Phase B candidate if it ever bites).
+### Validator — repo-aware `(repo, tag)` keying
 
-**Field-level validation is out of scope.** This validator's single invariant is tag↔entry presence. The `Date`, `Status`, `Artifact`, `PRs`, and `Summary` field formats are not parsed or checked. A separate `validate-entry-contents` check is a Phase B candidate.
+`ahimsa.validate_releases` audits `RELEASES.md` (in ahimsa) against the git tag lists of all in-scope repos. Bidirectional, keyed on `(repo, tag)`:
 
-**Status values are invisible.** A tag whose entry has `Status: failed` or `Status: superseded` still satisfies the bidirectional rule. The validator does not interpret status semantics — that's the job of human readers.
+- Every git tag (`vX.Y.Z` / `vX.Y.Z-PRERELEASE`) in each repo MUST have a matching `## <repo> <tag>` entry.
+- Every entry MUST correspond to an actual tag in that repo.
+- Duplicate `(repo, tag)` entries fail with a `duplicate entry` error. **Cross-repo same-version tags do NOT collide** — e.g. `## matika v0.0.1` and `## eyerate v0.0.1` are distinct, valid entries (this is why the heading carries the repo slug).
 
-**Tag filtering.** Tags whose names do not match `^v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$` (e.g. `legacy-rev`, `release-1`) are ignored entirely; they neither require entries nor count as drift.
+**Heading grammar** (`ahimsa/releases_grammar.py`, shared by validator and renderer per R-H): two-group regex `^##[ \t]+([a-z][a-z0-9-]*)[ \t]+(v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)[ \t]*$` — repo slug + tag. `slug_from_repo()` derives the slug (lowercase last path segment) from a full `host/owner/repo` spec. Headings with trailing junk deliberately do not match.
 
-**CLI.** `ahimsa-validate-releases <repo-spec>` runs the check standalone. Exit codes match the rest of ahimsa: 0 clean, 1 drift, 2 configuration error.
+**Repo set.** `validate_releases(repos: list[str], ...)` takes the repo list explicitly. The CLI (`ahimsa-validate-releases`) derives it from `recipe.json` (`matika.repo` + `applugs[].repo`) plus ahimsa's own repo (`GITHUB_REPOSITORY`); recipe.json is read-only here.
 
-**Transitive integration.** `ahimsa-validate <recipe>` invokes `validate_releases` for `matika.repo` and each `applugs[i].repo`. Errors flow into the same returned list with pointers like `matika.releases.tag["..."]` or `applugs[i].releases.entry["..."]`. This means a recipe-validation pass enforces release-log consistency across every repo the recipe pins.
+**Unchanged invariants.** Field-level content (`Date`/`Status`/`Artifact`/`PRs`/`Summary`) is still NOT parsed — only `(repo, tag)`-heading presence. So `published`/`superseded`/`failed`/breadcrumb/newest-first remain human conventions. Audit point is HEAD, not the recipe's pinned tag. Non-conforming tag names (`legacy-rev`, etc.) are ignored. CLI exit codes: 0 clean, 1 drift, 2 config error.
+
+**Transitive integration.** `ahimsa-validate <recipe>` invokes `validate_releases` over the recipe's repos; release-log drift surfaces as errors alongside recipe-validation errors.
+
+### Per-repo release notes (file-based)
+
+Each repo ships a human-facing GitHub Release at tag time whose body comes from a versioned file `docs/release-notes/<tag>.md` (never inline in CI). In ahimsa's `build.yml` release job (Q4 **hybrid**): the recipe-derived header + `AppLugs included` list stays **job-generated** (accurate to `recipe.json`), concatenated with the prose from `docs/release-notes/<tag>.md`. If no per-tag file exists, a minimal body is emitted (Q3 fallback). matika and eyerate publish **notes-only** releases linking back to ahimsa's installer release (their installers live only on ahimsa's release).
+
+### `workflow_dispatch` refresh
+
+`build.yml` has a `refresh-releases-md` job (`workflow_dispatch` only) that re-renders `RELEASES.md` from `release-log.yaml` and **opens a PR** with the result — it never pushes to `main`. Use it to log a between-release / single-repo hotfix tag without a full manomatika release.
 
 ## GitHub Actions Workflows
 
