@@ -2,24 +2,53 @@
 
 **Ahimsa** | Copyright (c) 2026 Patrick James Tallman
 
-Ahimsa is the build, validation, and release system for 
-Matika-based applications. A recipe repo is how a developer 
-or software company defines and releases a Matika application 
-composed of one or more AppLugs.
+Ahimsa is the **recipe ENGINE** for Matika-based applications: the build,
+validation, and release *mechanism*, plus the recipe *schema*. It is the
+machinery that turns a validated recipe into installer binaries — it is not
+the product, and it is not the authority over what ships.
 
-## What Ahimsa Is
+## Ecosystem Architecture
 
-- A recipe repo — defines what applugs make up an application
-- A validator — ensures all applugs target the same matika version
-- A build pipeline — clones matika + applugs and produces DMG/EXE
-- A reference implementation for Matika application distribution
+The shipped PRODUCT is **ManoMatika** — a pinned *triple* of component versions
+(matika + eyerate + ahimsa). A release blesses exactly one validated triple.
+
+- **`manomatika/manomatika`** — PRODUCT AUTHORITY. Owns the recipes, the audit
+  log (`release-log.yaml` + `RELEASES.md`), the product release and the single
+  hosted installer binary, the cross-component umbrella docs, the per-version
+  manifest/BOM (pins each component by tag AND resolved SHA), and the QA gate.
+- **`ahimsa`** — RECIPE ENGINE ONLY. Owns the build / validation / release
+  *mechanism* and the recipe *schema*. Owns no recipes, no audit-log content,
+  and hosts no GitHub releases of its own. Builds installers as transient CI
+  artifacts (`workflow_dispatch`); the product release is cut by
+  `manomatika/manomatika`.
+- **`matika`, `eyerate`** — components. Self-scoped architecture docs;
+  notes-only GitHub releases (no installer binaries).
+
+> **Migration status (current divergence — keep accurate, do not pretend it's
+> done).** `manomatika/manomatika` is being created separately and the move has
+> not landed in this repo yet. Today, ahimsa still physically contains
+> `recipes/reference-app/recipe.json`, `release-log.yaml` + `RELEASES.md` at the
+> repo root, and a `build.yml` `release` job that runs `gh release create` on
+> tag push. Those are slated to move to `manomatika/manomatika`. The sections
+> below describe the engine mechanism as it actually exists in this repo and
+> flag where current state diverges from the target ownership model above.
+
+## What the Engine Does
+
+- **Recipe schema + validator** — defines the recipe format and enforces every
+  rule in a single pass (see *Validation Rules*).
+- **Build pipeline** — clones matika + the recipe's applugs at their pinned
+  tags and produces DMG/EXE installer artifacts.
+- **Release mechanism** — the `build.yml` workflow that orchestrates validate →
+  build → (currently) release.
 
 ## Mental Model
 
 - Matika is the framework (like Electron or Qt)
 - AppLugs are plugins
 - recipe.json is the lockfile — exact version pins, no ranges
-- Ahimsa is the build machinery
+- Ahimsa is the build machinery; the product/recipe/audit-log authority is
+  `manomatika/manomatika`
 
 ## Key Concepts
 
@@ -32,6 +61,10 @@ composed of one or more AppLugs.
 ## Working Style & Discipline
 
 This section captures the standing working rules across the manomatika ecosystem. **CLAUDE.md is authoritative for how a fresh Claude Code instance should operate in this repo; keep it current as practices evolve.** The terminal milestone of every release is `Documentation & Release Readiness`, which includes auditing and updating every CLAUDE.md against what actually shipped.
+
+### Documentation integrity
+
+CLAUDE.md must never knowingly contain stale information. Whenever CLAUDE.md is edited or regenerated, every factual claim about this repo (workflow/job status, ownership boundaries, file locations, build/release state) must be verified against the actual current repo state before being written. Stale claims are defects. When a claim cannot be verified, omit it rather than guess.
 
 ### Collaboration model
 
@@ -85,16 +118,23 @@ This section captures the standing working rules across the manomatika ecosystem
 - The user is on **macOS / iTerm2** (tmux planned). Shell defaults to zsh.
 - The user is **expert in software architecture and engineering, novice in git/GitHub specifics.** When git or `gh` commands appear in plans or output, explain plainly what they do, what they touch, and what the user will see.
 
-## Recipes
+## Recipes (engine consumes; authority is `manomatika/manomatika`)
+
+Recipe *content* is owned by `manomatika/manomatika`; ahimsa owns the recipe
+*schema* and consumes a recipe as the build input. The recipe-format rules the
+engine enforces:
 
 - Recipes live at `recipes/<app>/recipe.json`. One directory per application. Asset paths inside the recipe (e.g. `application.icon`) are relative to the recipe's directory, not the repo root.
 - Recipes pin exact X.Y.Z versions. No ranges, no wildcards, no `_dev` suffixes. `_dev` is a development-only marker in source repos (matika, applugs); recipes consume only released tags.
 
-## Current Recipe
+**Current divergence.** A recipe still physically lives in this repo at
+`recipes/reference-app/recipe.json` (Matika Reference Application) pending the
+move to `manomatika/manomatika`. As checked into ahimsa today it pins:
+- matika 0.0.4 (`tag v0.0.4`) from `github.com/pjtallman/Matika`
+- eyerate 0.0.4 (`tag v0.0.4`) from `github.com/pjtallman/EyeRate`
 
-recipes/reference-app/recipe.json — Matika Reference Application
-- matika 0.0.4 from github.com/pjtallman/matika
-- eyerate 0.0.4 from github.com/pjtallman/eyerate
+`build.yml`'s `workflow_dispatch` defaults to this path; under the target model
+the recipe is fetched from `manomatika/manomatika` instead.
 
 ## Package Layout
 
@@ -211,11 +251,18 @@ The token value is never logged and never appears in any error message — only 
 
 ## Release-Notes System & Central Release Log
 
-ahimsa hosts the **manomatika-wide release log** and the release-notes machinery for the whole ecosystem. This replaced the older per-repo `RELEASES.md` convention (matika's own `RELEASES.md` was deleted; its entries were migrated here).
+> **Ownership note.** The ecosystem audit log (`release-log.yaml` + `RELEASES.md`)
+> is owned by `manomatika/manomatika` in the target model. **Current divergence:**
+> both files still physically live at ahimsa's repo root, and the release-notes
+> machinery (renderer, grammar, validator) still lives in the engine here. The
+> mechanism described below is accurate to this repo today; the *content
+> authority* is migrating to `manomatika/manomatika`.
+
+The release log is the **manomatika-wide release log** for the whole ecosystem. It replaced the older per-repo `RELEASES.md` convention (matika's own `RELEASES.md` was deleted; its entries were migrated here).
 
 ### `RELEASES.md` is a GENERATED artifact
 
-`RELEASES.md` at ahimsa's repo root is the single, ecosystem-wide audit log covering tags across **all three repos** (matika, eyerate, ahimsa). **It is generated — do NOT hand-edit `RELEASES.md`.** The human-edited source of truth is **`release-log.yaml`** at ahimsa's repo root.
+`RELEASES.md` (currently at ahimsa's repo root) is the single, ecosystem-wide audit log covering tags across **all three repos** (matika, eyerate, ahimsa). **It is generated — do NOT hand-edit `RELEASES.md`.** The human-edited source of truth is **`release-log.yaml`** (currently at ahimsa's repo root).
 
 - **`release-log.yaml`** — one record per `(repo, tag)` with the non-derivable, human-curated fields: `summary`, `status` (incl. `superseded_by`), `prs`, `artifact`, `date`. **Edit this file**, then regenerate `RELEASES.md`.
 - **Renderer** (`ahimsa/release_log.py` + `scripts/render_releases_md.py`) — merges `release-log.yaml` with live cross-repo tag data and renders `RELEASES.md` newest-first, with `## <repo> <tag>` headings. A live tag with no YAML record produces a templated placeholder entry plus a warning so a human backfills it. Run `python scripts/render_releases_md.py` before opening a release PR; commit the regenerated `RELEASES.md` in the same PR.
@@ -239,7 +286,7 @@ ahimsa hosts the **manomatika-wide release log** and the release-notes machinery
 
 ### Per-repo release notes (file-based)
 
-Each repo ships a human-facing GitHub Release at tag time whose body comes from a versioned file `docs/release-notes/<tag>.md` (never inline in CI). In ahimsa's `build.yml` release job (Q4 **hybrid**): the recipe-derived header + `AppLugs included` list stays **job-generated** (accurate to `recipe.json`), concatenated with the prose from `docs/release-notes/<tag>.md`. If no per-tag file exists, a minimal body is emitted (Q3 fallback). matika and eyerate publish **notes-only** releases linking back to ahimsa's installer release (their installers live only on ahimsa's release).
+Each repo ships a human-facing GitHub Release at tag time whose body comes from a versioned file `docs/release-notes/<tag>.md` (never inline in CI). In ahimsa's `build.yml` release job (Q4 **hybrid**): the recipe-derived header + `AppLugs included` list stays **job-generated** (accurate to `recipe.json`), concatenated with the prose from `docs/release-notes/<tag>.md`. If no per-tag file exists, a minimal body is emitted (Q3 fallback). matika and eyerate publish **notes-only** releases (no installer binaries). Under the target model the single hosted installer lives on the `manomatika/manomatika` product release; **current divergence:** ahimsa's `build.yml` `release` job still attaches the installer artifacts to an ahimsa release on tag push, pending migration.
 
 ### `workflow_dispatch` refresh
 
@@ -247,13 +294,31 @@ Each repo ships a human-facing GitHub Release at tag time whose body comes from 
 
 ## GitHub Actions Workflows
 
-- validate.yml — runs on every push and PR to main
-  Installs `pip install -e ".[test]"`, runs `pytest tests/`
-  Live recipe step commented out (TODO: re-enable after v0.0.4 tags ship)
-- build.yml — runs on workflow_dispatch or tag push (v*)
-  Jobs: validate → build-macos-arm → build-macos-intel → 
-  build-windows → release
-  All build jobs are currently stubbed with TODOs
+- **`validate.yml`** — runs on every push and PR to `main`. Installs
+  `pip install -e ".[test]"`, runs `pytest tests/`. A live recipe-validation
+  step is present but commented out with a TODO to re-enable once matika v0.0.4
+  and eyerate v0.0.4 are tagged (the live remote-fetch step fails until those
+  tags exist; unit tests cover all validator logic via mocks).
+- **`build.yml`** — runs on `workflow_dispatch` (with a `recipe_path` input) or
+  on tag push (`v*`). Jobs:
+  - `validate` → installs ahimsa, runs `ahimsa-validate "$RECIPE_PATH"` (fail
+    fast).
+  - `build-macos-arm` (macos-14), `build-macos-intel` (macos-13),
+    `build-windows` (windows-latest) — all `needs: validate`, run in parallel.
+    **These build jobs are fully implemented, not stubbed:** each reads recipe
+    metadata, clones matika at `recipe.matika.tag`, clones each applug into
+    `build/matika/plugins/`, runs `npm install && npm run build`, freezes with
+    `pyinstaller matika.spec`, then wraps the output — macOS via
+    `scripts/make_dmg.py` (dmgbuild), Windows via `installer/windows_installer.iss`
+    (Inno Setup) — and uploads the DMG/EXE as a CI artifact.
+  - `release` — `needs` all three build jobs, runs only on tag push. Validates
+    the release log, downloads artifacts, generates notes, and runs
+    `gh release create`. **Current divergence:** under the target ownership
+    model the product release + hosted installer belong to
+    `manomatika/manomatika`, and the engine builds only transient artifacts via
+    `workflow_dispatch`; this `release` job has not yet been removed.
+  - `refresh-releases-md` — `workflow_dispatch` only; re-renders `RELEASES.md`
+    from `release-log.yaml` and opens a PR (never pushes to `main`).
 
 ## Architecture Decisions
 
@@ -261,11 +326,21 @@ Each repo ships a human-facing GitHub Release at tag time whose body comes from 
 - BaseResolver ABC + registry ready for future RegistryResolver (M4)
 - DMG via dmgbuild Python library (macos-14 arm64, macos-13 intel)
 - Windows installer via Inno Setup
-- Release job creates GitHub release with all three artifacts
+- Installer artifacts are produced by the engine's build jobs; the product
+  release that attaches them is the authority of `manomatika/manomatika`
+  (currently still produced by ahimsa's `build.yml` `release` job pending
+  migration — see *GitHub Actions Workflows*).
 
 ## Workflow Positioning
 
-- Ahimsa is downstream of matika and applug releases — it consumes only released, tagged versions. Steady-state: a matika or applug release → ahimsa picks it up via recipe update → ahimsa releases.
+- Ahimsa is downstream of matika and applug releases — it consumes only released, tagged versions. Steady-state: a matika or applug release → recipe update (in `manomatika/manomatika`) → engine build.
+- **Release / QA flow (target):** tag matika v0.0.4 + eyerate v0.0.4 as
+  **prereleases** → dispatch ahimsa `build.yml` (`workflow_dispatch`, recipe
+  fetched from `manomatika/manomatika`) → QA the x86_64 DMG artifact → on pass,
+  tag ahimsa v0.0.1, author the `manomatika/manomatika` manifest/BOM, and cut
+  the `manomatika/manomatika` product release with the DMG attached there. The
+  prerelease flag is the trust boundary; the `manomatika/manomatika` product
+  release is the only blessed product.
 - v0.0.4 is the exception cycle: ahimsa is being built for the first time (its own version is v0.0.1). matika v0.0.4 and eyerate v0.0.4 will be released first; ahimsa v0.0.1 will then be finalized against those real tags.
 
 ## Test Fixture Convention
@@ -283,5 +358,5 @@ General working discipline (tests, git, security checks, cross-repo refs, etc.) 
 
 - All recipe changes must pass `validate.yml` before merge.
 - Exact version pins only in `recipe.json` — never ranges.
-- `recipe.json` is the sole source of truth for what ships.
+- `recipe.json` is the build input that defines the triple the engine assembles; the authority over what *ships as the product* is `manomatika/manomatika`'s manifest/BOM + product release.
 - Standard Python `.gitignore` (GitHub's official Python template) is in place: covers `__pycache__/`, build/dist, `*.egg-info/`, `.pytest_cache/`, `.coverage`, `htmlcov/`, venv variants, `.tox/`, installer artifacts (`*.dmg`, `*.exe`, etc.), and OS/IDE noise. Never commit compiled artifacts.
