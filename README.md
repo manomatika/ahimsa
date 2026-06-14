@@ -1,6 +1,6 @@
 # ahimsa
 
-**Build, validation, and release system for Matika-based applications.**
+**Recipe engine — build and validation system for Matika-based applications.**
 
 A recipe repo is how a developer or software company defines, validates, and
 releases a Matika application composed of one or more AppLugs. ahimsa provides
@@ -109,10 +109,10 @@ The following rules are enforced:
    }
    ```
 
-3. Run validation: `ahimsa-validate recipes/<app>/recipe.json`
+3. Run validation: `ahimsa-validate <path/to/recipe.json>` (the recipe lives
+   in `manomatika/manomatika`; clone mm and supply the local path).
 
-4. Commit the updated recipe and push. The `validate.yml` GitHub Action will
-   run automatically.
+4. Commit the updated recipe to `manomatika/manomatika` and open a PR there.
 
 ---
 
