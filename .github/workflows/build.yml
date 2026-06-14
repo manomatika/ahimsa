@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build
 
 on:
   workflow_dispatch:
@@ -7,9 +7,6 @@ on:
         description: "Path to recipe.json (e.g. recipes/reference-app/recipe.json)"
         required: false
         default: "recipes/reference-app/recipe.json"
-  push:
-    tags:
-      - "v*"
 
 # ---------------------------------------------------------------------------
 # VALIDATE
@@ -459,118 +456,6 @@ jobs:
         with:
           name: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe
           path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe
-
-  # ---------------------------------------------------------------------------
-  # RELEASE — tag push only
-  # ---------------------------------------------------------------------------
-  release:
-    runs-on: ubuntu-latest
-    needs: [build-macos-arm, build-macos-intel, build-windows]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    env:
-      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Read recipe metadata
-        id: recipe_info
-        shell: bash
-        run: |
-          python3 - <<'PYEOF'
-          import json, os, re
-          path = os.environ["RECIPE_PATH"]
-          with open(path) as f:
-              r = json.load(f)
-          name    = r["application"]["name"]
-          slug    = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-          version = r["application"]["version"]
-          out = os.environ["GITHUB_OUTPUT"]
-          with open(out, "a") as f:
-              f.write(f"app_name={name}\n")
-              f.write(f"app_slug={slug}\n")
-              f.write(f"app_version={version}\n")
-          PYEOF
-
-      - name: Install ahimsa
-        run: pip install -e .
-
-      - name: Validate release log (fail on drift)
-        run: ahimsa-validate-releases
-
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-
-      - name: List downloaded artifacts
-        run: find artifacts -type f | sort
-
-      - name: Generate release notes
-        shell: bash
-        run: |
-          python3 - <<'PYEOF'
-          import json, os
-          from pathlib import Path
-          path = os.environ["RECIPE_PATH"]
-          with open(path) as f:
-              r = json.load(f)
-          name     = r["application"]["name"]
-          version  = r["application"]["version"]
-          matika_v = r["matika"]["version"]
-          # Dynamic header lines (recipe-derived).
-          lines = [
-              f"## {name} v{version}",
-              "",
-              f"Built with [Matika](https://github.com/manomatika/matika) {matika_v}.",
-              "",
-              "**AppLugs included:**",
-          ]
-          for plug in r["applugs"]:
-              lines.append(
-                  f"- **{plug['name']}** v{plug['version']} "
-                  f"(matika_version: {plug['matika_version']})"
-              )
-          # Per-tag release notes file (§8.4-A Q4 hybrid).
-          # Derive the tag from the git ref: GITHUB_REF_NAME is set by Actions.
-          tag = os.environ.get("GITHUB_REF_NAME", "")
-          notes_file = Path(f"docs/release-notes/{tag}.md")
-          if notes_file.exists():
-              # Append the static per-release notes from the versioned file.
-              static_text = notes_file.read_text()
-              lines.append(static_text.rstrip("\n"))
-          else:
-              # Q3 fallback: no per-tag file found; emit a minimal body.
-              lines += [
-                  "",
-                  f"## {name} v{version}",
-                  "",
-                  f"Built with Matika {matika_v}.",
-                  "",
-                  "No release notes file found for this tag.",
-              ]
-          with open("release_notes.md", "w") as f:
-              f.write("\n".join(lines) + "\n")
-          print("Release notes:")
-          print("\n".join(lines))
-          PYEOF
-
-      - name: Create GitHub release
-        shell: bash
-        run: |
-          APP_NAME="${{ steps.recipe_info.outputs.app_name }}"
-          APP_VERSION="${{ steps.recipe_info.outputs.app_version }}"
-          ARTIFACTS=$(find artifacts -type f | sort | tr '\n' ' ')
-
-          gh release create "${{ github.ref_name }}" \
-            --title "${APP_NAME} v${APP_VERSION}" \
-            --notes-file release_notes.md \
-            $ARTIFACTS
 
   # ---------------------------------------------------------------------------
   # REFRESH RELEASES.MD — workflow_dispatch only
