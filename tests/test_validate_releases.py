@@ -33,6 +33,8 @@ from ahimsa.validate_releases import parse_entries, validate_releases
 # Canonical repo spec used in most single-repo tests.
 REPO = "github.com/manomatika/matika"
 AHIMSA_REPO = "github.com/manomatika/ahimsa"
+# MM_REPO is the default RELEASES.md host (manomatika/manomatika).
+MM_REPO = "github.com/manomatika/manomatika"
 
 # The fixture dir still exists for the snapshot test (updated format).
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "releases_md"
@@ -80,8 +82,8 @@ class _MultiRepoMock(BaseResolver):
     responses: {repo_spec: {"releases_md": str | None, "tags": list[str],
                              "manifest": AppLugManifest | None}}
 
-    The ahimsa entry (keyed by AHIMSA_REPO) must provide "releases_md" so the
-    validator can fetch the central RELEASES.md.
+    The mm entry (keyed by MM_REPO = github.com/manomatika/manomatika) must
+    provide "releases_md" so the validator can fetch the central RELEASES.md.
     """
 
     def __init__(self, responses: dict[str, dict]) -> None:
@@ -524,7 +526,7 @@ _VALID_RECIPE = {
 def test_transitive_drift_in_matika_surfaces_with_matika_pointer(tmp_path):
     """Drift in matika's release log surfaces under the `matika.releases.*` pointer.
 
-    The central RELEASES.md (served from the ahimsa entry) has only
+    The central RELEASES.md (served from manomatika/manomatika) has only
     ``## matika v0.0.3`` -- tag v0.0.4 exists but has no entry.
     """
     recipe_path = _write_recipe(tmp_path, _VALID_RECIPE)
@@ -532,7 +534,7 @@ def test_transitive_drift_in_matika_surfaces_with_matika_pointer(tmp_path):
     releases_md = "## matika v0.0.3\n"
 
     mock = _MultiRepoMock({
-        AHIMSA_REPO: {
+        MM_REPO: {
             "releases_md": releases_md,
             "tags": [],
         },
@@ -558,14 +560,15 @@ def test_transitive_drift_in_matika_surfaces_with_matika_pointer(tmp_path):
 def test_transitive_drift_in_applug_surfaces_with_applugs_pointer(tmp_path):
     """Drift in an applug's release log surfaces under `applugs[i].releases.*`.
 
-    The central RELEASES.md has ``## eyerate v0.0.5`` but eyerate has no such tag.
+    The central RELEASES.md (served from manomatika/manomatika) has
+    ``## eyerate v0.0.5`` but eyerate has no such tag.
     """
     recipe_path = _write_recipe(tmp_path, _VALID_RECIPE)
 
     releases_md_for_eyerate = "## eyerate v0.0.5\n"
 
     mock = _MultiRepoMock({
-        AHIMSA_REPO: {
+        MM_REPO: {
             "releases_md": releases_md_for_eyerate,
             "tags": [],
         },

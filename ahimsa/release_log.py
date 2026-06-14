@@ -1,8 +1,8 @@
 """
 release_log.py — YAML-driven release log loader and RELEASES.md renderer.
 
-The central release log lives in release-log.yaml at the repo root. This
-module provides:
+The central release log lives in release-log.yaml in manomatika/manomatika
+(product authority). This module provides:
   - ReleaseEntry: dataclass for a single release record
   - load_release_log(path): reads release-log.yaml -> list[ReleaseEntry]
   - render_releases_md(entries, live_tags): renders RELEASES.md content
@@ -12,8 +12,8 @@ placeholder entry is emitted and a warning is printed to stderr. For an
 entry with no matching live tag: still rendered (breadcrumb tags may be
 absent from git but retained in the log per the convention).
 
-Q16b STUB: the live_tags dict is populated by StubTagResolver, not the live
-GitHubResolver. Wire in manomatika/ahimsa#49 after #38-early lands.
+The live_tags dict is populated by the caller. render_releases_md.py uses
+GitHubResolver to fetch live tag lists (manomatika/ahimsa#49 wired).
 """
 
 from __future__ import annotations

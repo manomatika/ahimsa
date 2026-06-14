@@ -249,22 +249,19 @@ The token value is never logged and never appears in any error message — only 
 
 ## Release-Notes System & Central Release Log
 
-> **Ownership note.** The ecosystem audit log (`release-log.yaml` + `RELEASES.md`)
-> is owned by `manomatika/manomatika` in the target model. **Current divergence:**
-> both files still physically live at ahimsa's repo root, and the release-notes
-> machinery (renderer, grammar, validator) still lives in the engine here. The
-> mechanism described below is accurate to this repo today; the *content
-> authority* is migrating to `manomatika/manomatika`.
-
-The release log is the **manomatika-wide release log** for the whole ecosystem. It replaced the older per-repo `RELEASES.md` convention (matika's own `RELEASES.md` was deleted; its entries were migrated here).
+The release log is the **manomatika-wide release log** for the whole ecosystem.
+It lives in `manomatika/manomatika` (product authority). ahimsa owns the
+rendering/validation *machinery*; the content lives in mm.
 
 ### `RELEASES.md` is a GENERATED artifact
 
-`RELEASES.md` (currently at ahimsa's repo root) is the single, ecosystem-wide audit log covering tags across **all three repos** (matika, eyerate, ahimsa). **It is generated — do NOT hand-edit `RELEASES.md`.** The human-edited source of truth is **`release-log.yaml`** (currently at ahimsa's repo root).
+`RELEASES.md` is the single, ecosystem-wide audit log covering tags across
+**all three repos** (matika, eyerate, ahimsa). **It is generated — do NOT
+hand-edit `RELEASES.md`.** The human-edited source of truth is **`release-log.yaml`**,
+both living in `manomatika/manomatika`.
 
-- **`release-log.yaml`** — one record per `(repo, tag)` with the non-derivable, human-curated fields: `summary`, `status` (incl. `superseded_by`), `prs`, `artifact`, `date`. **Edit this file**, then regenerate `RELEASES.md`.
-- **Renderer** (`ahimsa/release_log.py` + `scripts/render_releases_md.py`) — merges `release-log.yaml` with live cross-repo tag data and renders `RELEASES.md` newest-first, with `## <repo> <tag>` headings. A live tag with no YAML record produces a templated placeholder entry plus a warning so a human backfills it. Run `python scripts/render_releases_md.py` before opening a release PR; commit the regenerated `RELEASES.md` in the same PR.
-- **Live cross-repo tag query is STUBBED** (Q16b). `ahimsa/stub_resolver.py::StubTagResolver` returns injected tag data; the live `GitHubResolver` cross-repo query is **wired in manomatika/ahimsa#49** (still open — blocker #38-early now satisfied). Until #49 lands, the renderer runs against the stub.
+- **`release-log.yaml`** — one record per `(repo, tag)` with the non-derivable, human-curated fields: `summary`, `status` (incl. `superseded_by`), `prs`, `artifact`, `date`. **Edit this file in mm**, then regenerate `RELEASES.md`.
+- **Renderer** (`ahimsa/release_log.py` + `scripts/render_releases_md.py`) — merges `release-log.yaml` with live cross-repo tag data (via `GitHubResolver`, manomatika/ahimsa#49) and renders `RELEASES.md` newest-first, with `## <repo> <tag>` headings. A live tag with no YAML record produces a templated placeholder entry plus a warning so a human backfills it. Run `python scripts/render_releases_md.py` (with `RELEASE_LOG_PATH`/`RELEASES_MD_PATH` env vars pointing to a mm checkout) before opening a release PR.
 
 ### Validator — repo-aware `(repo, tag)` keying
 
@@ -276,7 +273,7 @@ The release log is the **manomatika-wide release log** for the whole ecosystem. 
 
 **Heading grammar** (`ahimsa/releases_grammar.py`, shared by validator and renderer per R-H): two-group regex `^##[ \t]+([a-z][a-z0-9-]*)[ \t]+(v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)[ \t]*$` — repo slug + tag. `slug_from_repo()` derives the slug (lowercase last path segment) from a full `host/owner/repo` spec. Headings with trailing junk deliberately do not match.
 
-**Repo set.** `validate_releases(repos: list[str], ...)` takes the repo list explicitly. The CLI (`ahimsa-validate-releases`) derives it from `recipe.json` (`matika.repo` + `applugs[].repo`) plus ahimsa's own repo (`GITHUB_REPOSITORY`); recipe.json is read-only here.
+**Repo set.** `validate_releases(repos: list[str], ...)` takes the repo list explicitly. The CLI (`ahimsa-validate-releases`) derives it from `recipe.json` (`matika.repo` + `applugs[].repo`) plus ahimsa's own repo; recipe.json is read-only here. The RELEASES.md is fetched from `manomatika/manomatika` (default).
 
 **Unchanged invariants.** Field-level content (`Date`/`Status`/`Artifact`/`PRs`/`Summary`) is still NOT parsed — only `(repo, tag)`-heading presence. So `published`/`superseded`/`failed`/breadcrumb/newest-first remain human conventions. Audit point is HEAD, not the recipe's pinned tag. Non-conforming tag names (`legacy-rev`, etc.) are ignored. CLI exit codes: 0 clean, 1 drift, 2 config error.
 
@@ -284,11 +281,19 @@ The release log is the **manomatika-wide release log** for the whole ecosystem. 
 
 ### Per-repo release notes (file-based)
 
-Each repo ships a human-facing GitHub Release at tag time whose body comes from a versioned file `docs/release-notes/<tag>.md` (never inline in CI). In ahimsa's `build.yml` release job (Q4 **hybrid**): the recipe-derived header + `AppLugs included` list stays **job-generated** (accurate to `recipe.json`), concatenated with the prose from `docs/release-notes/<tag>.md`. If no per-tag file exists, a minimal body is emitted (Q3 fallback). matika and eyerate publish **notes-only** releases (no installer binaries). Under the target model the single hosted installer lives on the `manomatika/manomatika` product release; **current divergence:** ahimsa's `build.yml` `release` job still attaches the installer artifacts to an ahimsa release on tag push, pending migration.
+Each repo ships a human-facing GitHub Release at tag time whose body comes from
+a versioned file `docs/release-notes/<tag>.md` (never inline in CI). The
+`manomatika/manomatika` product release body is assembled from the recipe-derived
+header + per-tag notes file. matika and eyerate publish **notes-only** releases
+(no installer binaries). The single hosted installer attaches to the
+`manomatika/manomatika` product release.
 
 ### `workflow_dispatch` refresh
 
-`build.yml` has a `refresh-releases-md` job (`workflow_dispatch` only) that re-renders `RELEASES.md` from `release-log.yaml` and **opens a PR** with the result — it never pushes to `main`. Use it to log a between-release / single-repo hotfix tag without a full manomatika release.
+`build.yml` has a `refresh-releases-md` job (`workflow_dispatch` only) that
+re-renders `RELEASES.md` in `manomatika/manomatika` from its `release-log.yaml`
+and **opens a PR to mm** with the result — it never pushes to `main`. Use it to
+log a between-release / single-repo hotfix tag without a full manomatika release.
 
 ## GitHub Actions Workflows
 
