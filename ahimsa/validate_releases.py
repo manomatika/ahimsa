@@ -1,14 +1,14 @@
 """
 validate_releases.py — enforces RELEASES.md ↔ git tag consistency.
 
-The central RELEASES.md lives in ahimsa (this repo). It logs releases for all
-repos in the manomatika ecosystem, using ``## <repo-slug> <tag>`` headings
-(e.g. ``## matika v0.0.4``). The validator fetches RELEASES.md once from
-ahimsa and runs per-repo bidirectional consistency against each repo's tag list
-at HEAD.
+The central RELEASES.md lives in manomatika/manomatika (the product-authority
+repo). It logs releases for all repos in the manomatika ecosystem, using
+``## <repo-slug> <tag>`` headings (e.g. ``## matika v0.0.4``). The validator
+fetches RELEASES.md once from manomatika/manomatika and runs per-repo
+bidirectional consistency against each repo's tag list at HEAD.
 
-Opt-in by file presence: if RELEASES.md is absent from ahimsa, the validator
-is a no-op.
+Opt-in by file presence: if RELEASES.md is absent from manomatika/manomatika,
+the validator is a no-op.
 
 Each repo in the set is validated independently:
   - Every tag of the form vX.Y.Z or vX.Y.Z-PRERELEASE in that repo's tag list
@@ -67,12 +67,13 @@ def validate_releases(
     resolvers: dict[str, BaseResolver] | None = None,
     allowed_hosts: list[str] | None = None,
 ) -> list[Error]:
-    """Audit RELEASES.md (in ahimsa) against git tag lists for all repos.
+    """Audit RELEASES.md (in manomatika/manomatika) against git tag lists for all repos.
 
     repos:          list of '<host>/<owner>/<repo>' specs to audit
-    ahimsa_repo:    '<host>/<owner>/<repo>' spec for the ahimsa repo that holds
-                    RELEASES.md; defaults to github.com/manomatika/ahimsa (or
-                    derived from GITHUB_REPOSITORY env var in CI). The caller
+    ahimsa_repo:    '<host>/<owner>/<repo>' spec for the repo that holds
+                    RELEASES.md; defaults to github.com/manomatika/manomatika.
+                    Parameter named 'ahimsa_repo' for backward compatibility;
+                    it now refers to the product-authority repo (mm). The caller
                     may override for testing.
     resolvers:      host -> resolver instance map; tests inject mocks here
     allowed_hosts:  direct override; bypasses config-file walk-up
@@ -80,22 +81,17 @@ def validate_releases(
     Returns a (possibly empty) list of Error objects with pointers like
     'releases.tag["<tag>"]' or 'releases.entry["<tag>"]'.
 
-    No-op (returns []) if RELEASES.md is absent from ahimsa at HEAD.
+    No-op (returns []) if RELEASES.md is absent from manomatika/manomatika at HEAD.
     """
     errors: list[Error] = []
 
     if not repos:
         return errors
 
-    # --- Determine ahimsa repo spec for RELEASES.md fetch ---
+    # --- Determine repo spec for RELEASES.md fetch ---
+    # RELEASES.md lives in manomatika/manomatika (product authority), not in ahimsa.
     if ahimsa_repo is None:
-        # In CI the GITHUB_REPOSITORY env var is set to 'owner/repo'. The host
-        # is always github.com for our ecosystem; prepend it.
-        env_repo = os.environ.get("GITHUB_REPOSITORY", "")
-        if env_repo:
-            ahimsa_repo = f"github.com/{env_repo}"
-        else:
-            ahimsa_repo = "github.com/manomatika/ahimsa"
+        ahimsa_repo = "github.com/manomatika/manomatika"
 
     ahimsa_host = ahimsa_repo.split("/", 1)[0]
 

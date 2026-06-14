@@ -20,7 +20,9 @@ from ahimsa.release_log import ReleaseEntry, load_release_log, render_releases_m
 from ahimsa.stub_resolver import StubTagResolver
 
 REPO_ROOT = Path(__file__).parent.parent
-RELEASE_LOG_PATH = REPO_ROOT / "release-log.yaml"
+# release-log.yaml lives in manomatika/manomatika (product authority).
+# tests/fixtures/release-log.yaml is a pinned snapshot used for regression tests.
+RELEASE_LOG_PATH = Path(__file__).parent / "fixtures" / "release-log.yaml"
 
 
 # ---------------------------------------------------------------------------

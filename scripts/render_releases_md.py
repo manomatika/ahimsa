@@ -1,21 +1,28 @@
 """
-render_releases_md.py — render RELEASES.md from release-log.yaml + stub tags.
+render_releases_md.py — render RELEASES.md from release-log.yaml + live tags.
 
-PR-time render: this script is run by the developer before opening a release
-PR (it is NOT a CI step itself — the CI step just validates with
-ahimsa-validate-releases). The generated RELEASES.md is committed as part of
-the release PR so the file stays in sync with the YAML source of truth.
+PR-time render: run this script before opening a release PR to regenerate
+RELEASES.md from the YAML source of truth. The generated RELEASES.md is
+committed in the same PR so the file stays in sync with the YAML.
 
-Q16b STUB: live cross-repo tag data comes from StubTagResolver until
-manomatika/ahimsa#49 after #38-early lands. Update this script to use the
-live GitHubResolver when wiring that issue.
+Paths default to the repo root but are overridable via env vars so the
+refresh-releases-md CI job can point them at a manomatika/manomatika checkout:
+
+    RELEASE_LOG_PATH=mm/release-log.yaml
+    RELEASES_MD_PATH=mm/RELEASES.md
+    python scripts/render_releases_md.py
+
+Live tags are fetched from GitHub via GitHubResolver. Set GITHUB_TOKEN or
+GH_TOKEN for authenticated requests (required for private repos; rate-limiting
+applies for unauthenticated calls to public repos).
 
 Usage:
     python scripts/render_releases_md.py
-    # Writes RELEASES.md to the repo root.
+    # Writes RELEASES.md to RELEASES_MD_PATH (default: repo root).
     # Exits 1 if any live tag has no YAML record.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -24,23 +31,27 @@ _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 from ahimsa.release_log import load_release_log, render_releases_md
-from ahimsa.stub_resolver import StubTagResolver
+from ahimsa.validate_recipe import GitHubResolver
 
-RELEASE_LOG_PATH = _REPO_ROOT / "release-log.yaml"
-RELEASES_MD_PATH = _REPO_ROOT / "RELEASES.md"
+RELEASE_LOG_PATH = Path(os.environ.get("RELEASE_LOG_PATH", str(_REPO_ROOT / "release-log.yaml")))
+RELEASES_MD_PATH = Path(os.environ.get("RELEASES_MD_PATH", str(_REPO_ROOT / "RELEASES.md")))
+
+_REPOS = {
+    "matika": "github.com/manomatika/matika",
+    "eyerate": "github.com/manomatika/eyerate",
+    "ahimsa": "github.com/manomatika/ahimsa",
+}
 
 
 def main() -> int:
     # Load the YAML source of truth.
     entries = load_release_log(RELEASE_LOG_PATH)
 
-    # Build live_tags from the stub resolver (Q16b).
-    # Live cross-repo tag query is stubbed per Q16b; wire in
-    # manomatika/ahimsa#49 after #38-early lands.
-    resolver = StubTagResolver()
+    # Fetch live tag lists from GitHub (closes manomatika/ahimsa#49).
+    resolver = GitHubResolver()
     live_tags: dict[str, list[str]] = {}
-    for slug in ("matika", "eyerate", "ahimsa"):
-        live_tags[slug] = resolver.list_tags(slug)
+    for slug, repo_spec in _REPOS.items():
+        live_tags[slug] = resolver.list_tags(repo_spec)
 
     # Check: every live tag must have a YAML record.
     covered = {(e.repo, e.tag) for e in entries}
