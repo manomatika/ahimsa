@@ -23,6 +23,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Fetch recipe from manomatika/manomatika
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$(dirname "$RECIPE_PATH")"
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/manomatika/manomatika/contents/$RECIPE_PATH" > "$RECIPE_PATH"
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -44,6 +52,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Fetch recipe from manomatika/manomatika
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$(dirname "$RECIPE_PATH")"
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/manomatika/manomatika/contents/$RECIPE_PATH" > "$RECIPE_PATH"
 
       - uses: actions/setup-python@v6
         with:
@@ -185,6 +201,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Fetch recipe from manomatika/manomatika
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$(dirname "$RECIPE_PATH")"
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/manomatika/manomatika/contents/$RECIPE_PATH" > "$RECIPE_PATH"
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -324,6 +348,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Fetch recipe from manomatika/manomatika
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$(dirname "$RECIPE_PATH")"
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/manomatika/manomatika/contents/$RECIPE_PATH" > "$RECIPE_PATH"
 
       - uses: actions/setup-python@v6
         with:

@@ -127,14 +127,11 @@ engine enforces:
 - Recipes live at `recipes/<app>/recipe.json`. One directory per application. Asset paths inside the recipe (e.g. `application.icon`) are relative to the recipe's directory, not the repo root.
 - Recipes pin exact X.Y.Z versions. No ranges, no wildcards, no `_dev` suffixes. `_dev` is a development-only marker in source repos (matika, applugs); recipes consume only released tags.
 
-**Current divergence.** A recipe still physically lives in this repo at
-`recipes/reference-app/recipe.json` (Matika Reference Application) pending the
-move to `manomatika/manomatika`. As checked into ahimsa today it pins:
-- matika 0.0.4 (`tag v0.0.4`) from `github.com/pjtallman/Matika`
-- eyerate 0.0.4 (`tag v0.0.4`) from `github.com/pjtallman/EyeRate`
-
-`build.yml`'s `workflow_dispatch` defaults to this path; under the target model
-the recipe is fetched from `manomatika/manomatika` instead.
+The reference-app recipe lives in `manomatika/manomatika` at
+`recipes/reference-app/recipe.json`, pinning matika v0.0.4 and eyerate v0.0.4
+from `github.com/manomatika/matika` and `github.com/manomatika/eyerate`.
+`build.yml`'s `workflow_dispatch` fetches it from mm at the path given by the
+`recipe_path` input (default `recipes/reference-app/recipe.json`).
 
 ## Package Layout
 
