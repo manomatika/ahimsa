@@ -39,8 +39,9 @@ The shipped PRODUCT is **ManoMatika** — a pinned *triple* of component version
   rule in a single pass (see *Validation Rules*).
 - **Build pipeline** — clones matika + the recipe's applugs at their pinned
   tags and produces DMG/EXE installer artifacts.
-- **Release mechanism** — the `build.yml` workflow that orchestrates validate →
-  build → (currently) release.
+- **Build pipeline trigger** — `build.yml` runs on `workflow_dispatch` only.
+  It orchestrates validate → build (DMG/EXE artifacts). The product release
+  is cut by `manomatika/manomatika`, not by this engine.
 
 ## Mental Model
 
@@ -296,26 +297,19 @@ Each repo ships a human-facing GitHub Release at tag time whose body comes from 
   step is present but commented out with a TODO to re-enable once matika v0.0.4
   and eyerate v0.0.4 are tagged (the live remote-fetch step fails until those
   tags exist; unit tests cover all validator logic via mocks).
-- **`build.yml`** — runs on `workflow_dispatch` (with a `recipe_path` input) or
-  on tag push (`v*`). Jobs:
-  - `validate` → installs ahimsa, runs `ahimsa-validate "$RECIPE_PATH"` (fail
-    fast).
+- **`build.yml`** — runs on `workflow_dispatch` only (with a `recipe_path`
+  input). The `push: tags: v*` trigger and the `release` job have been removed;
+  ahimsa builds artifacts on demand, never creates GitHub releases. Jobs:
+  - `validate` → fetches recipe from `manomatika/manomatika`, installs ahimsa,
+    runs `ahimsa-validate "$RECIPE_PATH"` (fail fast).
   - `build-macos-arm` (macos-14), `build-macos-intel` (macos-13),
     `build-windows` (windows-latest) — all `needs: validate`, run in parallel.
-    **These build jobs are fully implemented, not stubbed:** each reads recipe
-    metadata, clones matika at `recipe.matika.tag`, clones each applug into
-    `build/matika/plugins/`, runs `npm install && npm run build`, freezes with
-    `pyinstaller matika.spec`, then wraps the output — macOS via
+    **These build jobs are fully implemented, not stubbed:** each fetches recipe
+    from mm, reads recipe metadata, clones matika at `recipe.matika.tag`, clones
+    each applug into `build/matika/plugins/`, runs `npm install && npm run build`,
+    freezes with `pyinstaller matika.spec`, then wraps the output — macOS via
     `scripts/make_dmg.py` (dmgbuild), Windows via `installer/windows_installer.iss`
     (Inno Setup) — and uploads the DMG/EXE as a CI artifact.
-  - `release` — `needs` all three build jobs, runs only on tag push. Validates
-    the release log, downloads artifacts, generates notes, and runs
-    `gh release create`. **Current divergence:** under the target ownership
-    model the product release + hosted installer belong to
-    `manomatika/manomatika`, and the engine builds only transient artifacts via
-    `workflow_dispatch`; this `release` job has not yet been removed.
-  - `refresh-releases-md` — `workflow_dispatch` only; re-renders `RELEASES.md`
-    from `release-log.yaml` and opens a PR (never pushes to `main`).
 
 ## Architecture Decisions
 
@@ -323,10 +317,9 @@ Each repo ships a human-facing GitHub Release at tag time whose body comes from 
 - BaseResolver ABC + registry ready for future RegistryResolver (M4)
 - DMG via dmgbuild Python library (macos-14 arm64, macos-13 intel)
 - Windows installer via Inno Setup
-- Installer artifacts are produced by the engine's build jobs; the product
-  release that attaches them is the authority of `manomatika/manomatika`
-  (currently still produced by ahimsa's `build.yml` `release` job pending
-  migration — see *GitHub Actions Workflows*).
+- Installer artifacts are produced by the engine's build jobs as transient CI
+  artifacts. The product release that attaches them is the authority of
+  `manomatika/manomatika`. ahimsa no longer runs `gh release create`.
 
 ## Workflow Positioning
 

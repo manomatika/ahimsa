@@ -2,23 +2,24 @@
 Structural regression tests for .github/workflows/build.yml.
 
 build.yml runs on GitHub Actions and cannot be exercised end-to-end locally,
-so these tests assert the *contract* of the foundation pipeline shipped in
-manomatika/ahimsa#9, #10 and manomatika/matika#26:
+so these tests assert the *contract* of the pipeline:
 
-  - the validate job invokes the installed validator (regression guard: it
-    previously pointed at a non-existent scripts/validate_recipe.py path)
-  - every platform build job clones matika at the recipe's pinned tag,
-    clones applugs into build/matika/plugins/, runs the npm build, and
-    invokes `pyinstaller matika.spec`
-
-The Wave 3 / PR 2 packaging + release work (manomatika/ahimsa#13, #14, #17,
-#18, #26; tracked by manomatika/matika#29, #30, #31) is now implemented and
-asserted here too:
+  - the workflow is workflow_dispatch ONLY — no tag-push trigger, no PR trigger
+  - the validate job fetches the recipe from manomatika/manomatika and invokes
+    the installed validator (regression guard: it previously pointed at a
+    non-existent scripts/validate_recipe.py path)
+  - every platform build job fetches the recipe from mm, then clones matika at
+    the recipe's pinned tag, clones applugs into build/matika/plugins/, runs
+    the npm build, and invokes `pyinstaller matika.spec`
   - macOS build jobs wrap the .app in a DMG via dmgbuild (no TODO stub left)
   - the Windows job runs Inno Setup against the one-dir bundle (no TODO stub)
-  - the release job is tag-triggered ONLY (not workflow_dispatch, not PR),
-    downloads all three artifacts, and emits release notes that include the
-    unsigned-installer known-limitation block.
+  - no `release` job exists — ahimsa builds artifacts on demand only;
+    product releases are cut by manomatika/manomatika
+
+The packaging + release work (manomatika/ahimsa#13, #14, #17, #18, #26;
+tracked by manomatika/matika#29, #30, #31) is implemented; the release job
+that shipped in that wave has since been removed (manomatika/ahimsa#55) as
+the product release authority moved to manomatika/manomatika.
 """
 
 from pathlib import Path
@@ -224,56 +225,42 @@ def test_windows_job_passes_version_defines_to_iscc(workflow):
 
 
 # ---------------------------------------------------------------------------
-# Release job (manomatika/matika#31, manomatika/ahimsa#26)
+# Release model guard — ahimsa does NOT create GitHub releases
 # ---------------------------------------------------------------------------
-def test_release_job_is_tag_triggered_only(workflow):
-    """The release job MUST run only on tag push — never on dispatch or PR.
-
-    This is the single most important guard: a misfire would publish a
-    GitHub release on a workflow_dispatch test run or (if the trigger set
-    ever grows a pull_request event) on a PR.
+def test_release_job_does_not_exist(workflow):
+    """ahimsa must NOT have a release job. Product releases are cut by
+    manomatika/manomatika. This guard prevents accidental re-introduction.
     """
-    job = workflow["jobs"]["release"]
-    cond = job["if"]
-    assert "github.event_name == 'push'" in cond
-    assert "startsWith(github.ref, 'refs/tags/')" in cond
+    assert "release" not in workflow["jobs"], (
+        "ahimsa must not have a release job — product releases belong to "
+        "manomatika/manomatika; remove any re-introduced release job"
+    )
 
 
-def test_workflow_trigger_excludes_pull_request(workflow):
-    """build.yml must not be PR-triggered (would let the gate fire early)."""
+def test_workflow_dispatch_only_trigger(workflow):
+    """build.yml must be workflow_dispatch ONLY — no tag push, no PR.
+
+    Tag push was removed (manomatika/ahimsa#55): ahimsa builds artifacts on
+    demand only. PR trigger was never added (would let the QA gate fire early).
+    """
     # PyYAML maps the bare `on:` key to the boolean True (the Norway problem).
     triggers = workflow.get(True, workflow.get("on"))
     assert triggers is not None, "could not locate the workflow `on:` block"
+    assert "workflow_dispatch" in triggers, "build.yml must be workflow_dispatch-triggered"
+    assert "push" not in triggers, (
+        "build.yml must NOT have a push trigger — ahimsa builds on demand only"
+    )
     assert "pull_request" not in triggers, (
         "build.yml must not run on pull_request"
     )
-    assert "workflow_dispatch" in triggers
-    assert "push" in triggers
 
 
-def test_release_job_downloads_all_three_artifacts(workflow):
-    job = workflow["jobs"]["release"]
-    # Depends on all three platform build jobs.
-    assert set(job["needs"]) == set(BUILD_JOBS)
-    steps = job["steps"]
-    assert any(
-        "download-artifact" in (s.get("uses") or "") for s in steps
-    ), "release job must download build artifacts"
+def test_release_notes_include_unsigned_limitation():
+    """docs/release-notes/v0.0.4.md must carry the unsigned-installer known limitation.
 
-
-def test_release_job_creates_github_release(workflow):
-    runs = _job_run_blocks(workflow["jobs"]["release"])
-    assert "gh release create" in runs
-    assert "release_notes.md" in runs
-
-
-def test_release_notes_include_unsigned_limitation(workflow):
-    """#26: release notes must carry the unsigned-installer known limitation.
-
-    The static text now lives in docs/release-notes/v0.0.4.md (§8.4-A Q4
-    hybrid). This test verifies the file exists and contains the expected
-    prose rather than checking the workflow run-block, because the text was
-    migrated out of the heredoc.
+    This file is the per-tag release notes source for the manomatika/manomatika
+    product release. The unsigned-installer prose documents the known limitation
+    that matika/eyerate/ahimsa installers are not yet code-signed.
     """
     notes_file = REPO_ROOT / "docs" / "release-notes" / "v0.0.4.md"
     assert notes_file.is_file(), "docs/release-notes/v0.0.4.md must exist"
@@ -281,36 +268,7 @@ def test_release_notes_include_unsigned_limitation(workflow):
     assert "not code-signed" in notes_text
     assert "Gatekeeper" in notes_text
     assert "SmartScreen" in notes_text
-    # Links to the code-signing milestone.
     assert "milestone/10" in notes_text
-
-
-def test_release_notes_list_applugs_from_recipe(workflow):
-    """The applug list is still job-generated from recipe data (stays in the heredoc)."""
-    runs = _job_run_blocks(workflow["jobs"]["release"])
-    assert "AppLugs included" in runs
-    assert 'r["applugs"]' in runs
-
-
-def test_release_notes_reads_per_tag_file_from_docs(workflow):
-    """The Generate release notes step reads docs/release-notes/{tag}.md (Q4 hybrid)."""
-    runs = _job_run_blocks(workflow["jobs"]["release"])
-    # The step must read from docs/release-notes/ using the tag.
-    assert "docs/release-notes/" in runs
-    assert "notes_file" in runs or "notes_file.exists()" in runs or ".exists()" in runs
-
-
-def test_release_notes_q3_fallback_on_missing_file(workflow):
-    """The Generate release notes step has a Q3 fallback when no per-tag file exists."""
-    runs = _job_run_blocks(workflow["jobs"]["release"])
-    # Q3 fallback emits a minimal body when no per-tag file is found.
-    assert "No release notes file found for this tag" in runs
-
-
-def test_release_job_validates_releases_log(workflow):
-    """The release job must run ahimsa-validate-releases to catch drift before publishing."""
-    runs = _job_run_blocks(workflow["jobs"]["release"])
-    assert "ahimsa-validate-releases" in runs
 
 
 # ---------------------------------------------------------------------------
