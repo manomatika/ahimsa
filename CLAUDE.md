@@ -24,14 +24,13 @@ The shipped PRODUCT is **ManoMatika** — a pinned *triple* of component version
 - **`matika`, `eyerate`** — components. Self-scoped architecture docs;
   notes-only GitHub releases (no installer binaries).
 
-> **Migration status (current divergence — keep accurate, do not pretend it's
-> done).** `manomatika/manomatika` is being created separately and the move has
-> not landed in this repo yet. Today, ahimsa still physically contains
-> `recipes/reference-app/recipe.json`, `release-log.yaml` + `RELEASES.md` at the
-> repo root, and a `build.yml` `release` job that runs `gh release create` on
-> tag push. Those are slated to move to `manomatika/manomatika`. The sections
-> below describe the engine mechanism as it actually exists in this repo and
-> flag where current state diverges from the target ownership model above.
+> **Migration status** — resolved. `manomatika/manomatika` now exists and all
+> planned moves have completed: the recipe lives in mm (fetched from mm at
+> `workflow_dispatch` time, not stored in ahimsa); the audit log
+> (`release-log.yaml` + `RELEASES.md`) lives in mm; and the `build.yml`
+> `release` job and `push: tags: v*` trigger have been removed. ahimsa now
+> holds only the engine mechanism: recipe schema + validator, build pipeline
+> (`workflow_dispatch`-only), and release-notes rendering/validation machinery.
 
 ## What the Engine Does
 
@@ -93,10 +92,11 @@ CLAUDE.md must never knowingly contain stale information. Whenever CLAUDE.md is 
 
 ### Repository ecosystem
 
-- **manomatika** is the GitHub org. Three repos compose the ecosystem:
+- **manomatika** is the GitHub org. Four repos compose the ecosystem:
+  - **manomatika/manomatika** — PRODUCT AUTHORITY: recipes, audit log, product release, umbrella docs, QA gate
   - **manomatika/matika** — the framework (plugin-agnostic FastAPI host)
   - **manomatika/eyerate** — the reference AppLug (financial security tracking)
-  - **manomatika/ahimsa** — release / build / recipe-validation tooling
+  - **manomatika/ahimsa** — recipe engine: build / validation / release mechanism (this repo)
 - Local clones live at `~/dev/projects/<repo>/` (sibling directories). Additional worktrees for the same repo live at `~/dev/projects/<repo>-<branch>/`.
 
 ### Milestones, Project, and dates
