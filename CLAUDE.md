@@ -164,7 +164,7 @@ pip install -e ".[test]"
 After install, all four invocation styles work:
 
 ```bash
-ahimsa-validate recipes/reference-app/recipe.json        # console-script entry point
+ahimsa-validate <path/to/recipe.json>                    # console-script entry point
 python3 -m ahimsa.validate_recipe <recipe>      # module invocation
 python3 ahimsa/validate_recipe.py <recipe>      # direct file
 python3 -c "from ahimsa.validate_recipe import validate; ..."
@@ -179,8 +179,8 @@ pytest tests/
 ## Running the Validator
 
 ```
-ahimsa-validate recipes/reference-app/recipe.json
-ahimsa-validate --config path/to/config.json recipes/reference-app/recipe.json
+ahimsa-validate <path/to/recipe.json>
+ahimsa-validate --config path/to/config.json <path/to/recipe.json>
 ```
 
 ## Validation Rules
