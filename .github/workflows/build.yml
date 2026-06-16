@@ -145,11 +145,16 @@ jobs:
         shell: bash
         working-directory: build/matika
         run: |
-          # matika.spec reads its own VERSION file and emits
-          # dist/Matika-<version>.app plus the dist/Matika-<version>/ COLLECT
-          # tree. Plugins cloned into plugins/ are bundled by launcher.py at
-          # first run, not by the spec. Run from the cloned matika root so the
-          # spec's SPEC-relative paths (src/, launcher.py, VERSION) resolve.
+          # CORE/SUFFIX CONTRACT (cross-repo with manomatika/matika):
+          # matika.spec reads matika's own VERSION, strips any pre-release
+          # suffix (-dev / -rc.N) to BARE CORE, and emits dist/Matika-<core>.app
+          # plus the dist/Matika-<core>/ COLLECT tree. The bare core equals the
+          # recipe's matika.version pin (validator-enforced X.Y.Z), so the
+          # MATIKA_VERSION output used below to locate the bundle matches the
+          # spec's name even when the build runs at an rc TAG (e.g. v0.0.4-rc.1).
+          # Plugins cloned into plugins/ are bundled by launcher.py at first run,
+          # not by the spec. Run from the cloned matika root so the spec's
+          # SPEC-relative paths (src/, launcher.py, VERSION) resolve.
           pyinstaller matika.spec --noconfirm
           echo "PyInstaller output:"
           ls -la dist
@@ -164,8 +169,10 @@ jobs:
           DMG_ARCH: arm64
         run: |
           # Wrap the PyInstaller .app bundle in a DMG via the dmgbuild library.
-          # The .app is named Matika-<matika_version>.app by matika.spec; the
-          # DMG filename follows ahimsa's convention <slug>-<app_version>-macos-<arch>.dmg.
+          # matika.spec emits Matika-<bare-core>.app (suffix stripped); MATIKA_VERSION
+          # is the recipe's bare-core matika.version, so this path matches even at an
+          # rc tag. The DMG filename follows ahimsa's convention
+          # <slug>-<app_version>-macos-<arch>.dmg.
           APP_BUNDLE="build/matika/dist/Matika-${MATIKA_VERSION}.app"
           DMG_NAME="${APP_SLUG}-${APP_VERSION}-macos-${DMG_ARCH}.dmg"
           if [ ! -d "$APP_BUNDLE" ]; then
@@ -293,11 +300,16 @@ jobs:
         shell: bash
         working-directory: build/matika
         run: |
-          # matika.spec reads its own VERSION file and emits
-          # dist/Matika-<version>.app plus the dist/Matika-<version>/ COLLECT
-          # tree. Plugins cloned into plugins/ are bundled by launcher.py at
-          # first run, not by the spec. Run from the cloned matika root so the
-          # spec's SPEC-relative paths (src/, launcher.py, VERSION) resolve.
+          # CORE/SUFFIX CONTRACT (cross-repo with manomatika/matika):
+          # matika.spec reads matika's own VERSION, strips any pre-release
+          # suffix (-dev / -rc.N) to BARE CORE, and emits dist/Matika-<core>.app
+          # plus the dist/Matika-<core>/ COLLECT tree. The bare core equals the
+          # recipe's matika.version pin (validator-enforced X.Y.Z), so the
+          # MATIKA_VERSION output used below to locate the bundle matches the
+          # spec's name even when the build runs at an rc TAG (e.g. v0.0.4-rc.1).
+          # Plugins cloned into plugins/ are bundled by launcher.py at first run,
+          # not by the spec. Run from the cloned matika root so the spec's
+          # SPEC-relative paths (src/, launcher.py, VERSION) resolve.
           pyinstaller matika.spec --noconfirm
           echo "PyInstaller output:"
           ls -la dist
@@ -312,8 +324,10 @@ jobs:
           DMG_ARCH: x86_64
         run: |
           # Wrap the PyInstaller .app bundle in a DMG via the dmgbuild library.
-          # The .app is named Matika-<matika_version>.app by matika.spec; the
-          # DMG filename follows ahimsa's convention <slug>-<app_version>-macos-<arch>.dmg.
+          # matika.spec emits Matika-<bare-core>.app (suffix stripped); MATIKA_VERSION
+          # is the recipe's bare-core matika.version, so this path matches even at an
+          # rc tag. The DMG filename follows ahimsa's convention
+          # <slug>-<app_version>-macos-<arch>.dmg.
           APP_BUNDLE="build/matika/dist/Matika-${MATIKA_VERSION}.app"
           DMG_NAME="${APP_SLUG}-${APP_VERSION}-macos-${DMG_ARCH}.dmg"
           if [ ! -d "$APP_BUNDLE" ]; then
@@ -442,8 +456,13 @@ jobs:
         shell: bash
         working-directory: build/matika
         run: |
-          # matika.spec reads its own VERSION file and emits the
-          # dist/Matika-<version>/ COLLECT tree containing Matika-<version>.exe.
+          # CORE/SUFFIX CONTRACT (cross-repo with manomatika/matika):
+          # matika.spec reads matika's own VERSION, strips any pre-release
+          # suffix (-dev / -rc.N) to BARE CORE, and emits the
+          # dist/Matika-<core>/ COLLECT tree containing Matika-<core>.exe. The
+          # bare core equals the recipe's matika.version pin (X.Y.Z), so the
+          # BUNDLE_DIR derived from MATIKA_VERSION below matches the spec's name
+          # even when building at an rc TAG (e.g. v0.0.4-rc.1).
           # Plugins cloned into plugins/ are bundled by launcher.py at first
           # run, not by the spec. Run from the cloned matika root so the spec's
           # SPEC-relative paths (src/, launcher.py, VERSION) resolve.

@@ -146,6 +146,24 @@ def test_valid_recipe_passes(tmp_path):
     assert errors == [], f"Unexpected errors: {[str(e) for e in errors]}"
 
 
+def test_prerelease_tag_passes_with_bare_core_pins(tmp_path):
+    """Core/suffix contract: a recipe may pin matika/applugs at a pre-release
+    git TAG (e.g. `v0.0.4-rc.1`) while the bare-core version pins stay X.Y.Z.
+
+    Tags are git refs, not pins — they are NOT version-format-checked, so an
+    rc tag must validate cleanly. This locks in that rc tags pass and is the
+    reason validate.yml's live recipe step can be re-enabled at rc time.
+    """
+    recipe = {
+        **VALID_RECIPE,
+        "matika": {**VALID_RECIPE["matika"], "tag": "v0.0.2-rc.1"},
+        "applugs": [{**VALID_RECIPE["applugs"][0], "tag": "v0.0.2-rc.1"}],
+    }
+    path = write_recipe(tmp_path, recipe)
+    errors = validate(path, resolvers=ok_resolvers())
+    assert errors == [], f"rc tag should pass: {[str(e) for e in errors]}"
+
+
 # ---------------------------------------------------------------------------
 # Schema: missing required application fields
 # ---------------------------------------------------------------------------
@@ -208,7 +226,8 @@ def test_empty_applugs_array(tmp_path):
     "*",
     "latest",
     "1.x",
-    "0.0.4_dev",
+    "0.0.4-dev",
+    "0.0.4-rc.1",
     "0.0.4-rc1",
     "0.0.4+build",
 ])
@@ -219,16 +238,18 @@ def test_invalid_application_version(tmp_path, bad_version):
 
 
 def test_dev_suffix_in_applug_version_rejected(tmp_path):
-    plug = {**VALID_RECIPE["applugs"][0], "version": "0.0.4_dev"}
+    # Pre-release suffixes (the -dev/-rc.N ladder) are human/audit-only markers;
+    # recipe pin fields must be bare core. A pin carrying any suffix is rejected.
+    plug = {**VALID_RECIPE["applugs"][0], "version": "0.0.4-dev"}
     errors = _validate({**VALID_RECIPE, "applugs": [plug]}, tmp_path)
     assert "applugs[0].version" in pointers(errors)
 
 
 def test_dev_suffix_in_applug_matika_version_rejected(tmp_path):
-    plug = {**VALID_RECIPE["applugs"][0], "matika_version": "0.0.4_dev"}
+    plug = {**VALID_RECIPE["applugs"][0], "matika_version": "0.0.4-dev"}
     recipe = {
         **VALID_RECIPE,
-        "matika": {**VALID_RECIPE["matika"], "version": "0.0.4_dev"},
+        "matika": {**VALID_RECIPE["matika"], "version": "0.0.4-dev"},
         "applugs": [plug],
     }
     errors = _validate(recipe, tmp_path)

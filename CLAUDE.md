@@ -126,7 +126,7 @@ Recipe *content* is owned by `manomatika/manomatika`; ahimsa owns the recipe
 engine enforces:
 
 - Recipes live at `recipes/<app>/recipe.json`. One directory per application. Asset paths inside the recipe (e.g. `application.icon`) are relative to the recipe's directory, not the repo root.
-- Recipes pin exact X.Y.Z versions. No ranges, no wildcards, no `_dev` suffixes. `_dev` is a development-only marker in source repos (matika, applugs); recipes consume only released tags.
+- Recipes pin exact **bare-core** X.Y.Z versions. No ranges, no wildcards, no pre-release suffixes. Pre-release suffixes (`-dev`, `-rc.N`) are development/audit-only markers in source repos (matika, applugs) and live only on human/audit surfaces (VERSION string, git tags, release titles); recipes consume only the bare core. Note: a recipe's `tag` field is a git ref and MAY carry a suffix (e.g. `v0.0.4-rc.1`) — only the `version`/`matika_version`/`matika.version` **pin** fields must be bare core.
 
 The reference-app recipe lives in `manomatika/manomatika` at
 `recipes/reference-app/recipe.json`, pinning matika v0.0.4 and eyerate v0.0.4
@@ -150,7 +150,7 @@ tests/                    — pytest test suite
   fixtures/               — per-scenario recipe + config fixtures
 scripts/
   build_standalone.py     — build orchestration (stubbed, not part of package)
-VERSION                   — single source of version ("0.0.1_dev")
+VERSION                   — single source of version ("0.0.1-dev")
 pyproject.toml            — package metadata; hatchling reads VERSION at build time
 config.json               — project-level allowed_hosts (walked up from recipes/)
 ```
@@ -189,7 +189,7 @@ ahimsa-validate --config path/to/config.json <path/to/recipe.json>
 
 **Schema validation**
 - Required fields: `application.{name, version, bundle_id, icon}`, `matika.{version, repo, tag}`, `applugs` (non-empty array), per-applug `{name, repo, version, matika_version, tag}`
-- Version format: every version field must match `^\d+\.\d+\.\d+$` exactly — ranges (`^`, `>=`, `~`), wildcards (`*`, `latest`, `1.x`), pre-release suffixes (`-rc1`, `+build`), and `_dev` suffixes are all rejected
+- Version (pin) format: every pin field (`application.version`, `matika.version`, applug `version`/`matika_version`) must match `^\d+\.\d+\.\d+$` exactly (bare core) — ranges (`^`, `>=`, `~`), wildcards (`*`, `latest`, `1.x`), and pre-release/build suffixes (`-dev`, `-rc.N`, `-rc1`, `+build`) are all rejected. The `tag` fields are git refs, not pins, and are NOT version-format-checked — a recipe may pin matika/applugs at a pre-release tag like `v0.0.4-rc.1` while the corresponding bare-core `version` stays `0.0.4`
 - `bundle_id` format: reverse-DNS, minimum 3 dot-separated components, each starting with a letter and containing only letters/digits/hyphens: `^[a-zA-Z][a-zA-Z0-9-]*(\.[a-zA-Z][a-zA-Z0-9-]*){2,}$`
 
 **Consistency rules**
@@ -299,9 +299,13 @@ log a between-release / single-repo hotfix tag without a full manomatika release
 
 - **`validate.yml`** — runs on every push and PR to `main`. Installs
   `pip install -e ".[test]"`, runs `pytest tests/`. A live recipe-validation
-  step is present but commented out with a TODO to re-enable once matika v0.0.4
-  and eyerate v0.0.4 are tagged (the live remote-fetch step fails until those
-  tags exist; unit tests cover all validator logic via mocks).
+  step is present but commented out with a TODO (tracked by
+  `manomatika/ahimsa#60`) to re-enable once `manomatika/matika` and
+  `manomatika/eyerate` publish their v0.0.4 (or v0.0.4-rc.N) tags — the live
+  remote-fetch step fails until those tags exist; unit tests cover all
+  validator logic via mocks. Because the validator format-checks only the
+  bare-core version pins (tags are git refs, not checked), the step can be
+  re-enabled at **rc** time, not only at final.
 - **`build.yml`** — runs on `workflow_dispatch` only (with a `recipe_path`
   input). The `push: tags: v*` trigger and the `release` job have been removed;
   ahimsa builds artifacts on demand, never creates GitHub releases. Jobs:
