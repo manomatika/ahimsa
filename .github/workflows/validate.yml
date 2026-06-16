@@ -25,10 +25,13 @@ jobs:
       - name: Run unit and invocation tests
         run: pytest tests/
 
-      # TODO: re-enable after matika v0.0.4 and eyerate v0.0.4 are tagged.
-      # The live remote-fetch step always fails until those tags exist; unit tests
-      # cover all validator logic via mocks. Re-enable as a one-line uncomment
-      # once both upstream repos have published their v0.0.4 release tags.
+      # TODO(manomatika/ahimsa#60): re-enable after manomatika/matika and
+      # manomatika/eyerate publish their v0.0.4 (or v0.0.4-rc.N) tags. The live
+      # remote-fetch step always fails until those tags exist; unit tests cover
+      # all validator logic via mocks. The validator accepts pre-release TAGS
+      # (e.g. v0.0.4-rc.1) — only the bare-core version PINS are format-checked —
+      # so this step can be re-enabled at rc time, not only at final. Re-enable
+      # as a one-line uncomment.
       # - name: Validate recipes
       #   run: |
       #     for recipe in recipes/*/recipe.json; do

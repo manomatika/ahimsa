@@ -3,6 +3,14 @@
 ; Packages PyInstaller's ONE-DIR output (the whole Matika-<matika_version>\
 ; directory tree, not a single exe) into a Windows installer EXE.
 ;
+; CORE/SUFFIX CONTRACT: <matika_version> here is always BARE CORE (X.Y.Z).
+; It is supplied by build.yml from recipe.matika.version (validator-enforced
+; bare core) and equals the bare core matika.spec emits after stripping any
+; pre-release suffix (-dev / -rc.N). So the bundle dir / exe this script
+; references (Matika-<bare-core>\ and Matika-<bare-core>.exe) match the spec's
+; output even when the build runs at a pre-release TAG. Never embed a suffix
+; into the bundle name, the exe name, or AppVersion.
+;
 ; All variable inputs are supplied by build.yml via ISCC /D defines so this
 ; script carries NO hardcoded version or path — the recipe (via build.yml's
 ; recipe_info outputs) is the single source of truth:
