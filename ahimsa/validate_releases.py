@@ -14,8 +14,11 @@ Each repo in the set is validated independently:
   - Every tag of the form vX.Y.Z or vX.Y.Z-PRERELEASE in that repo's tag list
     must have a corresponding ``## <slug> <tag>`` entry in RELEASES.md.
   - Every ``## <slug> <tag>`` entry must correspond to an actual tag in that
-    repo's tag list (breadcrumb tags retained intentionally may appear as
-    orphan entries — these are expected false-positives per the convention).
+    repo's tag list, UNLESS the entry is marked ``deleted_tag: true`` in
+    release-log.yaml (intentionally-absent breadcrumb). The validator fetches
+    release-log.yaml from manomatika/manomatika and builds the exemption set
+    automatically. The opposite direction — live tag with no entry — is always
+    enforced regardless of any ``deleted_tag`` marking.
 
 The repo set is derived by the CALLER and passed in — ``validate_releases``
 does not read recipe.json itself. This keeps the function pure and testable.
@@ -82,6 +85,15 @@ def validate_releases(
     'releases.tag["<tag>"]' or 'releases.entry["<tag>"]'.
 
     No-op (returns []) if RELEASES.md is absent from manomatika/manomatika at HEAD.
+
+    Exemptions: entries with ``deleted_tag: true`` in release-log.yaml (fetched
+    from the same repo, with the same resolver, as RELEASES.md) are EXEMPT from
+    the "entry but no tag" check — they are deliberate audit breadcrumbs for tags
+    that were removed after publishing. The exemption is one-directional: it can
+    only suppress an "entry but no tag" error, never a "tag but no entry" error.
+    Building the exemption set is fail-open: if release-log.yaml is absent or
+    malformed the set collapses to empty, so legitimately-absent breadcrumbs
+    surface their pre-fix error LOUDLY rather than being silently exempted.
     """
     errors: list[Error] = []
 
@@ -120,6 +132,30 @@ def validate_releases(
     if text is None:
         # Opt-in by file presence: no RELEASES.md → no-op.
         return errors
+
+    # --- Build the deleted-tag exemption set from release-log.yaml ---
+    # Entries with deleted_tag: true are intentionally-absent breadcrumbs; the
+    # "entry but no tag" check is skipped for them. release-log.yaml is fetched
+    # with the SAME resolver, the SAME repo (mm), and the SAME ref ("HEAD") as
+    # RELEASES.md above — it is the authoritative source for both files.
+    #
+    # Fail-open: if release-log.yaml is missing or malformed, the exemption set
+    # collapses to empty. With strict deleted_tag parsing this is the SAFE
+    # direction — a malformed value makes legitimate breadcrumbs error LOUDLY
+    # rather than being silently and wrongly exempted.
+    exempt_pairs: set[tuple[str, str]] = set()
+    try:
+        rl_text = ahimsa_res.fetch_text(ahimsa_repo, "HEAD", "release-log.yaml")
+    except Exception:
+        rl_text = None
+
+    if rl_text is not None:
+        try:
+            from ahimsa.release_log import parse_release_log_text
+            rl_entries = parse_release_log_text(rl_text)
+            exempt_pairs = {(e.repo, e.tag) for e in rl_entries if e.deleted_tag}
+        except (ValueError, ImportError):
+            exempt_pairs = set()
 
     all_entries = parse_entries(text)
 
@@ -161,14 +197,29 @@ def validate_releases(
         # Filter to in-scope tags only — non-conforming names are ignored.
         tag_set = {t for t in all_tags if TAG_RE.match(t)}
 
+        # --- Warn on stale exemptions: deleted_tag: true but tag STILL exists ---
+        # The entry/tag pair is consistent (no drift), so this is not an error —
+        # only a data-quality issue worth surfacing for human attention.
+        for tag in sorted(t for s, t in exempt_pairs if s == slug and t in tag_set):
+            print(
+                f"WARNING: {slug} {tag} is marked deleted_tag=true in "
+                "release-log.yaml but the tag still exists on the remote. "
+                "Remove deleted_tag: true if the tag is intentionally present.",
+                file=sys.stderr,
+            )
+
         # --- Bidirectional consistency (deterministic ordering) ---
+        # Category A (tag but no entry) is UNCHANGED — never exempted.
         for tag in sorted(tag_set - entry_set):
             errors.append(Error(
                 f'releases.tag["{tag}"]',
                 "tag exists but no entry in RELEASES.md",
             ))
 
+        # Category B (entry but no tag) — exempt intentionally-absent breadcrumbs.
         for tag in sorted(entry_set - tag_set):
+            if (slug, tag) in exempt_pairs:
+                continue  # intentionally-absent breadcrumb: skip
             errors.append(Error(
                 f'releases.entry["{tag}"]',
                 "entry in RELEASES.md but tag does not exist",

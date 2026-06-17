@@ -58,10 +58,12 @@ class _ReleasesMock(BaseResolver):
         *,
         releases_md: str | None = None,
         tags: list[str] | None = None,
+        release_log: str | None = None,
     ) -> None:
         super().__init__(host="github.com")
         self._text = releases_md
         self._tags = list(tags) if tags is not None else []
+        self._release_log = release_log
 
     def _canonicalize_repo(self, owner: str, repo: str) -> tuple[str, str]:
         return (owner, repo)
@@ -70,6 +72,8 @@ class _ReleasesMock(BaseResolver):
         return ""
 
     def fetch_text(self, repo: str, ref: str, path: str) -> str | None:
+        if path == "release-log.yaml":
+            return self._release_log
         return self._text
 
     def list_tags(self, repo: str) -> list[str]:
@@ -103,6 +107,8 @@ class _MultiRepoMock(BaseResolver):
         return manifest
 
     def fetch_text(self, repo: str, ref: str, path: str) -> str | None:
+        if path == "release-log.yaml":
+            return self._responses.get(repo, {}).get("release_log")
         return self._responses.get(repo, {}).get("releases_md")
 
     def list_tags(self, repo: str) -> list[str]:
@@ -456,6 +462,171 @@ def test_real_matika_snapshot_round_trips_cleanly():
         resolvers={"github.com": mock},
     )
     assert errors == []
+
+
+# ---------------------------------------------------------------------------
+# validate_releases — deleted_tag exemption (intentionally-absent breadcrumbs)
+# ---------------------------------------------------------------------------
+
+
+def _release_log_yaml(*entries: tuple[str, bool | None]) -> str:
+    """Build a minimal release-log.yaml string for matika entries.
+
+    Each entry is ``(tag, deleted_tag)``; ``deleted_tag=None`` omits the field.
+    """
+    lines = ["entries:"]
+    for tag, deleted in entries:
+        lines.append("  - repo: matika")
+        lines.append(f"    tag: {tag}")
+        lines.append('    date: "2026-05-06"')
+        lines.append("    status: published")
+        lines.append('    artifact: "none"')
+        lines.append('    prs: "manomatika/matika#1"')
+        if deleted is not None:
+            lines.append(f"    deleted_tag: {'true' if deleted else 'false'}")
+        lines.append('    summary: "test entry"')
+    return "\n".join(lines) + "\n"
+
+
+def test_intentionally_absent_tag_is_exempted():
+    """Entry marked deleted_tag=true, tag absent from remote -> no error."""
+    text = "## matika v0.0.4-dev.0\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=[],
+        release_log=_release_log_yaml(("v0.0.4-dev.0", True)),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert errors == []
+
+
+def test_unmarked_absent_tag_still_errors():
+    """Entry WITHOUT deleted_tag but tag absent -> still errors (explicit opt-in)."""
+    text = "## matika v0.0.4-dev.99\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=[],
+        release_log=_release_log_yaml(("v0.0.4-dev.99", None)),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert len(errors) == 1
+    assert errors[0].pointer == 'releases.entry["v0.0.4-dev.99"]'
+    assert "tag does not exist" in errors[0].message
+
+
+def test_live_tag_without_entry_still_errors_after_exemption():
+    """Regression: Category A (tag but no entry) is unaffected by exemptions."""
+    text = "## matika v0.0.4-dev.0\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=["v0.0.4", "v0.0.4-dev.0"],  # v0.0.4 has no entry
+        release_log=_release_log_yaml(("v0.0.4-dev.0", True)),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert len(errors) == 1
+    assert errors[0].pointer == 'releases.tag["v0.0.4"]'
+    assert "tag exists but no entry" in errors[0].message
+
+
+def test_deleted_tag_that_still_exists_emits_warning(capsys):
+    """Edge case: deleted_tag=true but the tag still exists -> warning, no error."""
+    text = "## matika v0.0.4-dev.0\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=["v0.0.4-dev.0"],  # tag IS still present
+        release_log=_release_log_yaml(("v0.0.4-dev.0", True)),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert errors == []
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "deleted_tag=true" in captured.err
+
+
+def test_mixed_exempt_and_nonexempt_absent_entries():
+    """Multiple absent entries; only the explicitly-marked one is exempted."""
+    text = "## matika v0.0.4-dev.0\n## matika v0.0.4-dev.99\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=[],  # neither tag exists
+        release_log=_release_log_yaml(
+            ("v0.0.4-dev.0", True),
+            ("v0.0.4-dev.99", None),
+        ),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert len(errors) == 1
+    assert errors[0].pointer == 'releases.entry["v0.0.4-dev.99"]'
+
+
+def test_no_release_log_yaml_gives_no_exemptions():
+    """release-log.yaml absent (fetch returns None) -> no exemptions (fail-open)."""
+    text = "## matika v0.0.4-dev.99\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=[],
+        release_log=None,  # release-log.yaml not served
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert len(errors) == 1
+    assert errors[0].pointer == 'releases.entry["v0.0.4-dev.99"]'
+
+
+def test_malformed_release_log_collapses_exemptions_and_errors_loudly():
+    """Fail-mode: a malformed deleted_tag value collapses the exemption set to
+    empty (strict parse raises -> fail-open except), so a legitimately-marked
+    breadcrumb errors LOUDLY rather than being silently exempted. This is the
+    intended safe direction (visible failure, never silent wrongful exemption).
+    """
+    text = "## matika v0.0.4-dev.0\n"
+    # deleted_tag is a quoted string, not a YAML boolean -> strict parse raises.
+    bad_release_log = (
+        "entries:\n"
+        "  - repo: matika\n"
+        "    tag: v0.0.4-dev.0\n"
+        '    date: "2026-05-06"\n'
+        "    status: published\n"
+        '    artifact: "none"\n'
+        '    prs: "manomatika/matika#1"\n'
+        '    deleted_tag: "false"\n'
+        '    summary: "test entry"\n'
+    )
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=[],
+        release_log=bad_release_log,
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert len(errors) == 1
+    assert errors[0].pointer == 'releases.entry["v0.0.4-dev.0"]'
 
 
 # ---------------------------------------------------------------------------

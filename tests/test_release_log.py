@@ -16,7 +16,12 @@ import pytest
 
 yaml = pytest.importorskip("yaml")
 
-from ahimsa.release_log import ReleaseEntry, load_release_log, render_releases_md
+from ahimsa.release_log import (
+    ReleaseEntry,
+    load_release_log,
+    parse_release_log_text,
+    render_releases_md,
+)
 from ahimsa.stub_resolver import StubTagResolver
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -214,13 +219,171 @@ def test_load_release_log_has_expected_repos():
 
 
 def test_load_release_log_matika_has_v004_entries():
-    """matika v0.0.4-dev.* entries are present."""
+    """matika v0.0.4-dev.* entries are present and marked deleted_tag."""
     pytest.importorskip("yaml")
     entries = load_release_log(RELEASE_LOG_PATH)
     matika_tags = [e.tag for e in entries if e.repo == "matika"]
     assert "v0.0.4-dev.2" in matika_tags
     assert "v0.0.4-dev.1" in matika_tags
     assert "v0.0.4-dev.0" in matika_tags
+
+    dev0 = next(e for e in entries if e.repo == "matika" and e.tag == "v0.0.4-dev.0")
+    dev1 = next(e for e in entries if e.repo == "matika" and e.tag == "v0.0.4-dev.1")
+    dev2 = next(e for e in entries if e.repo == "matika" and e.tag == "v0.0.4-dev.2")
+    assert dev0.deleted_tag is True
+    assert dev1.deleted_tag is True
+    assert dev2.deleted_tag is True
+
+
+def test_load_release_log_v003_entry_defaults_deleted_tag_false():
+    """An entry with no deleted_tag field defaults to False through the loader."""
+    pytest.importorskip("yaml")
+    entries = load_release_log(RELEASE_LOG_PATH)
+    v003 = next(e for e in entries if e.repo == "matika" and e.tag == "v0.0.3")
+    assert v003.deleted_tag is False
+
+
+# ---------------------------------------------------------------------------
+# parse_release_log_text — deleted_tag field + strict parsing
+# ---------------------------------------------------------------------------
+
+
+_TWO_ENTRY_YAML = textwrap.dedent(
+    """\
+    entries:
+      - repo: matika
+        tag: v0.0.4-dev.0
+        date: "2026-05-06"
+        status: published
+        artifact: "none"
+        prs: "manomatika/matika#1"
+        deleted_tag: true
+        summary: "Marked deleted."
+      - repo: matika
+        tag: v0.0.4
+        date: "2026-05-10"
+        status: published
+        artifact: "none"
+        prs: "manomatika/matika#2"
+        summary: "Not marked."
+    """
+)
+
+
+def test_parse_release_log_text_handles_deleted_tag_field():
+    """parse_release_log_text reads deleted_tag: true vs. omitted correctly."""
+    entries = parse_release_log_text(_TWO_ENTRY_YAML)
+    assert len(entries) == 2
+    assert entries[0].tag == "v0.0.4-dev.0"
+    assert entries[0].deleted_tag is True
+    assert entries[1].tag == "v0.0.4"
+    assert entries[1].deleted_tag is False
+
+
+def test_parse_release_log_text_missing_deleted_tag_defaults_false():
+    """deleted_tag is optional; absence means False."""
+    yaml_text = textwrap.dedent(
+        """\
+        entries:
+          - repo: matika
+            tag: v0.0.4
+            date: "2026-05-10"
+            status: published
+            artifact: "none"
+            prs: "manomatika/matika#2"
+            summary: "No deleted_tag field."
+        """
+    )
+    entries = parse_release_log_text(yaml_text)
+    assert entries[0].deleted_tag is False
+
+
+def test_parse_release_log_text_explicit_false_is_false():
+    """deleted_tag: false parses to False (not exempted)."""
+    yaml_text = textwrap.dedent(
+        """\
+        entries:
+          - repo: matika
+            tag: v0.0.4
+            date: "2026-05-10"
+            status: published
+            artifact: "none"
+            prs: "manomatika/matika#2"
+            deleted_tag: false
+            summary: "Explicit false."
+        """
+    )
+    entries = parse_release_log_text(yaml_text)
+    assert entries[0].deleted_tag is False
+
+
+def test_parse_release_log_text_non_boolean_deleted_tag_raises():
+    """STRICT parsing: a non-boolean deleted_tag value raises ValueError.
+
+    A permissive bool() coercion would turn the quoted string "false" into
+    Python True, wrongly exempting the entry. Strict parsing forbids this — the
+    safe direction for an audit-integrity field that suppresses a safety check.
+    """
+    yaml_text = textwrap.dedent(
+        """\
+        entries:
+          - repo: matika
+            tag: v0.0.4
+            date: "2026-05-10"
+            status: published
+            artifact: "none"
+            prs: "manomatika/matika#2"
+            deleted_tag: "false"
+            summary: "Quoted string, not a YAML boolean."
+        """
+    )
+    with pytest.raises(ValueError, match="deleted_tag"):
+        parse_release_log_text(yaml_text)
+
+
+def test_load_release_log_missing_deleted_tag_defaults_false(tmp_path):
+    """Through the file-based loader, a missing deleted_tag field defaults to False."""
+    pytest.importorskip("yaml")
+    f = tmp_path / "release-log.yaml"
+    f.write_text(
+        textwrap.dedent(
+            """\
+            entries:
+              - repo: matika
+                tag: v0.0.4
+                date: "2026-05-10"
+                status: published
+                artifact: "none"
+                prs: "manomatika/matika#2"
+                summary: "No deleted_tag field."
+            """
+        )
+    )
+    entries = load_release_log(f)
+    assert entries[0].deleted_tag is False
+
+
+def test_load_release_log_non_boolean_deleted_tag_raises(tmp_path):
+    """The file-based loader also enforces strict deleted_tag parsing."""
+    pytest.importorskip("yaml")
+    f = tmp_path / "release-log.yaml"
+    f.write_text(
+        textwrap.dedent(
+            """\
+            entries:
+              - repo: matika
+                tag: v0.0.4
+                date: "2026-05-10"
+                status: published
+                artifact: "none"
+                prs: "manomatika/matika#2"
+                deleted_tag: maybe
+                summary: "Non-boolean value."
+            """
+        )
+    )
+    with pytest.raises(ValueError, match="deleted_tag"):
+        load_release_log(f)
 
 
 def test_load_release_log_missing_file():

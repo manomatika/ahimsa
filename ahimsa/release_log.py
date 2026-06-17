@@ -40,6 +40,7 @@ class ReleaseEntry:
     artifact: str
     prs: str
     summary: str
+    deleted_tag: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -47,36 +48,56 @@ class ReleaseEntry:
 # ---------------------------------------------------------------------------
 
 
-def load_release_log(path: str | Path) -> list[ReleaseEntry]:
-    """Read *path* (release-log.yaml) and return a list of ReleaseEntry objects.
+_REQUIRED_FIELDS = ("repo", "tag", "date", "status", "artifact", "prs", "summary")
 
-    Requires PyYAML (``pip install pyyaml`` or listed in test deps).
-    Raises ImportError if pyyaml is not installed.
-    Raises FileNotFoundError if *path* does not exist.
-    Raises ValueError if the YAML is malformed or missing required fields.
+
+def _coerce_deleted_tag(value: Any, index: int, item: dict) -> bool:
+    """Strictly interpret an entry's optional ``deleted_tag`` field.
+
+    ``deleted_tag`` is an audit-integrity field: it SUPPRESSES the "entry but no
+    tag" safety check, so a misparse toward exemption is the dangerous direction.
+    A permissive ``bool(value)`` would coerce the quoted YAML string ``"false"``
+    to ``True`` (Python truthiness), wrongly exempting an entry. We therefore
+    accept ONLY a genuine YAML boolean or absence:
+
+      - absent / null  -> False
+      - real bool      -> that bool
+      - anything else  -> ValueError naming the entry and the offending value
+    """
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    label = f"{item.get('repo', '?')} {item.get('tag', '?')}"
+    raise ValueError(
+        f"release-log.yaml entry [{index}] ({label}): 'deleted_tag' must be a "
+        f"YAML boolean (true/false) or absent, got {value!r}"
+    )
+
+
+def parse_release_log_text(text: str) -> list[ReleaseEntry]:
+    """Parse release-log.yaml *content* (a string) into ReleaseEntry objects.
+
+    Requires PyYAML. Raises ImportError if pyyaml is not installed; ValueError
+    if the YAML is malformed, missing required fields, or carries a non-boolean
+    ``deleted_tag`` value (strict parsing — see ``_coerce_deleted_tag``).
     """
     try:
         import yaml
     except ImportError as e:
         raise ImportError(
-            "pyyaml is required to load release-log.yaml. "
+            "pyyaml is required to parse release-log.yaml. "
             "Install it with: pip install pyyaml"
         ) from e
 
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"release-log.yaml not found at {path}")
-
-    with open(path) as f:
-        raw: Any = yaml.safe_load(f)
+    raw: Any = yaml.safe_load(text)
 
     if not isinstance(raw, dict) or "entries" not in raw:
-        raise ValueError(f"release-log.yaml must have a top-level 'entries' key: {path}")
+        raise ValueError("release-log.yaml must have a top-level 'entries' key")
 
     entries: list[ReleaseEntry] = []
-    required_fields = ("repo", "tag", "date", "status", "artifact", "prs", "summary")
     for i, item in enumerate(raw["entries"]):
-        missing = [f for f in required_fields if f not in item]
+        missing = [f for f in _REQUIRED_FIELDS if f not in item]
         if missing:
             raise ValueError(
                 f"release-log.yaml entry [{i}] missing required fields: {missing}"
@@ -89,8 +110,30 @@ def load_release_log(path: str | Path) -> list[ReleaseEntry]:
             artifact=str(item["artifact"]),
             prs=str(item["prs"]),
             summary=str(item["summary"]).strip(),
+            deleted_tag=_coerce_deleted_tag(item.get("deleted_tag"), i, item),
         ))
     return entries
+
+
+def load_release_log(path: str | Path) -> list[ReleaseEntry]:
+    """Read *path* (release-log.yaml) and return a list of ReleaseEntry objects.
+
+    Delegates parsing to ``parse_release_log_text`` (DRY); this function only
+    handles file I/O and decorates parse errors with the file path.
+
+    Requires PyYAML. Raises ImportError if pyyaml is not installed.
+    Raises FileNotFoundError if *path* does not exist.
+    Raises ValueError if the YAML is malformed or missing required fields.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"release-log.yaml not found at {path}")
+
+    text = path.read_text()
+    try:
+        return parse_release_log_text(text)
+    except ValueError as e:
+        raise ValueError(f"{e} (in {path})") from e
 
 
 # ---------------------------------------------------------------------------
