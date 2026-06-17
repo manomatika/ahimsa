@@ -386,6 +386,170 @@ def test_load_release_log_non_boolean_deleted_tag_raises(tmp_path):
         load_release_log(f)
 
 
+# ---------------------------------------------------------------------------
+# parse_release_log_text — pending field (forward-looking placeholder)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_release_log_text_handles_pending_field():
+    """parse_release_log_text reads pending: true vs. omitted correctly."""
+    yaml_text = textwrap.dedent(
+        """\
+        entries:
+          - repo: ahimsa
+            tag: v0.0.1
+            date: "(pending)"
+            status: "(pending — tag not yet pushed)"
+            artifact: "none (pending)"
+            prs: "(pending)"
+            pending: true
+            summary: "Placeholder."
+          - repo: matika
+            tag: v0.0.1
+            date: "2026-05-10"
+            status: published
+            artifact: "none"
+            prs: "manomatika/matika#2"
+            summary: "Not pending."
+        """
+    )
+    entries = parse_release_log_text(yaml_text)
+    assert len(entries) == 2
+    assert entries[0].tag == "v0.0.1"
+    assert entries[0].pending is True
+    assert entries[0].deleted_tag is False
+    assert entries[1].pending is False
+
+
+def test_parse_release_log_text_missing_pending_defaults_false():
+    """pending is optional; absence means False."""
+    yaml_text = textwrap.dedent(
+        """\
+        entries:
+          - repo: matika
+            tag: v0.0.4
+            date: "2026-05-10"
+            status: published
+            artifact: "none"
+            prs: "manomatika/matika#2"
+            summary: "No pending field."
+        """
+    )
+    entries = parse_release_log_text(yaml_text)
+    assert entries[0].pending is False
+
+
+def test_parse_release_log_text_explicit_false_pending_is_false():
+    """pending: false parses to False (not exempted)."""
+    yaml_text = textwrap.dedent(
+        """\
+        entries:
+          - repo: matika
+            tag: v0.0.4
+            date: "2026-05-10"
+            status: published
+            artifact: "none"
+            prs: "manomatika/matika#2"
+            pending: false
+            summary: "Explicit false."
+        """
+    )
+    entries = parse_release_log_text(yaml_text)
+    assert entries[0].pending is False
+
+
+def test_parse_release_log_text_non_boolean_pending_raises():
+    """STRICT parsing: a non-boolean pending value raises ValueError.
+
+    Same rationale as deleted_tag — pending suppresses the "entry but no tag"
+    safety check, so a permissive coercion (quoted "false" -> True) would
+    wrongly exempt an entry. Strict parsing forbids it.
+    """
+    yaml_text = textwrap.dedent(
+        """\
+        entries:
+          - repo: matika
+            tag: v0.0.4
+            date: "2026-05-10"
+            status: published
+            artifact: "none"
+            prs: "manomatika/matika#2"
+            pending: "true"
+            summary: "Quoted string, not a YAML boolean."
+        """
+    )
+    with pytest.raises(ValueError, match="pending"):
+        parse_release_log_text(yaml_text)
+
+
+def test_parse_release_log_text_pending_and_deleted_tag_contradiction_raises():
+    """An entry marked BOTH pending and deleted_tag is contradictory -> ValueError."""
+    yaml_text = textwrap.dedent(
+        """\
+        entries:
+          - repo: ahimsa
+            tag: v0.0.1
+            date: "(pending)"
+            status: "(pending)"
+            artifact: "none"
+            prs: "(pending)"
+            pending: true
+            deleted_tag: true
+            summary: "Cannot be both not-yet-created and deleted."
+        """
+    )
+    with pytest.raises(ValueError, match="cannot both be true"):
+        parse_release_log_text(yaml_text)
+
+
+def test_load_release_log_pending_through_file(tmp_path):
+    """Through the file-based loader, pending: true round-trips and missing -> False."""
+    pytest.importorskip("yaml")
+    f = tmp_path / "release-log.yaml"
+    f.write_text(
+        textwrap.dedent(
+            """\
+            entries:
+              - repo: ahimsa
+                tag: v0.0.1
+                date: "(pending)"
+                status: "(pending)"
+                artifact: "none"
+                prs: "(pending)"
+                pending: true
+                summary: "Placeholder."
+            """
+        )
+    )
+    entries = load_release_log(f)
+    assert entries[0].pending is True
+    assert entries[0].deleted_tag is False
+
+
+def test_load_release_log_pending_deleted_tag_contradiction_raises(tmp_path):
+    """The file-based loader also rejects the pending+deleted_tag contradiction."""
+    pytest.importorskip("yaml")
+    f = tmp_path / "release-log.yaml"
+    f.write_text(
+        textwrap.dedent(
+            """\
+            entries:
+              - repo: ahimsa
+                tag: v0.0.1
+                date: "(pending)"
+                status: "(pending)"
+                artifact: "none"
+                prs: "(pending)"
+                pending: true
+                deleted_tag: true
+                summary: "Contradiction."
+            """
+        )
+    )
+    with pytest.raises(ValueError, match="cannot both be true"):
+        load_release_log(f)
+
+
 def test_load_release_log_missing_file():
     """FileNotFoundError raised when the file doesn't exist."""
     pytest.importorskip("yaml")

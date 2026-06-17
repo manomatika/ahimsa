@@ -14,11 +14,13 @@ Each repo in the set is validated independently:
   - Every tag of the form vX.Y.Z or vX.Y.Z-PRERELEASE in that repo's tag list
     must have a corresponding ``## <slug> <tag>`` entry in RELEASES.md.
   - Every ``## <slug> <tag>`` entry must correspond to an actual tag in that
-    repo's tag list, UNLESS the entry is marked ``deleted_tag: true`` in
-    release-log.yaml (intentionally-absent breadcrumb). The validator fetches
+    repo's tag list, UNLESS the entry is marked ``deleted_tag: true`` (a
+    BACKWARD-looking breadcrumb for a tag that existed and was intentionally
+    removed) or ``pending: true`` (a FORWARD-looking placeholder for a release
+    that does not exist YET) in release-log.yaml. The validator fetches
     release-log.yaml from manomatika/manomatika and builds the exemption set
     automatically. The opposite direction — live tag with no entry — is always
-    enforced regardless of any ``deleted_tag`` marking.
+    enforced regardless of any ``deleted_tag``/``pending`` marking.
 
 The repo set is derived by the CALLER and passed in — ``validate_releases``
 does not read recipe.json itself. This keeps the function pure and testable.
@@ -86,13 +88,17 @@ def validate_releases(
 
     No-op (returns []) if RELEASES.md is absent from manomatika/manomatika at HEAD.
 
-    Exemptions: entries with ``deleted_tag: true`` in release-log.yaml (fetched
-    from the same repo, with the same resolver, as RELEASES.md) are EXEMPT from
-    the "entry but no tag" check — they are deliberate audit breadcrumbs for tags
-    that were removed after publishing. The exemption is one-directional: it can
-    only suppress an "entry but no tag" error, never a "tag but no entry" error.
-    Building the exemption set is fail-open: if release-log.yaml is absent or
-    malformed the set collapses to empty, so legitimately-absent breadcrumbs
+    Exemptions: entries with ``deleted_tag: true`` (backward-looking — a tag that
+    existed and was intentionally removed) or ``pending: true`` (forward-looking
+    — a release that does not exist YET) in release-log.yaml (fetched from the
+    same repo, with the same resolver, as RELEASES.md) are EXEMPT from the "entry
+    but no tag" check. Both exemptions are one-directional: each can only suppress
+    an "entry but no tag" error, never a "tag but no entry" error (Category A is
+    always enforced). If an exempted entry's tag NOW exists on the remote, a
+    stderr WARNING is emitted so the stale marking is corrected. Building the
+    exemption set is fail-open: if release-log.yaml is absent or malformed (incl.
+    a contradictory ``deleted_tag: true`` + ``pending: true`` entry, which raises)
+    the set collapses to empty, so legitimately-absent breadcrumbs/placeholders
     surface their pre-fix error LOUDLY rather than being silently exempted.
     """
     errors: list[Error] = []
@@ -133,17 +139,22 @@ def validate_releases(
         # Opt-in by file presence: no RELEASES.md → no-op.
         return errors
 
-    # --- Build the deleted-tag exemption set from release-log.yaml ---
-    # Entries with deleted_tag: true are intentionally-absent breadcrumbs; the
-    # "entry but no tag" check is skipped for them. release-log.yaml is fetched
-    # with the SAME resolver, the SAME repo (mm), and the SAME ref ("HEAD") as
-    # RELEASES.md above — it is the authoritative source for both files.
+    # --- Build the Category-B exemption set from release-log.yaml ---
+    # Two kinds of entry are exempt from the "entry but no tag" check:
+    #   - deleted_tag: true — BACKWARD-looking breadcrumb (tag existed, removed)
+    #   - pending: true     — FORWARD-looking placeholder (release not created yet)
+    # Both are tracked separately so the right "...but the tag now exists"
+    # WARNING is emitted; the union drives the actual Category-B exemption.
+    # release-log.yaml is fetched with the SAME resolver, the SAME repo (mm), and
+    # the SAME ref ("HEAD") as RELEASES.md above — the authoritative source.
     #
     # Fail-open: if release-log.yaml is missing or malformed, the exemption set
-    # collapses to empty. With strict deleted_tag parsing this is the SAFE
-    # direction — a malformed value makes legitimate breadcrumbs error LOUDLY
-    # rather than being silently and wrongly exempted.
-    exempt_pairs: set[tuple[str, str]] = set()
+    # collapses to empty. With strict deleted_tag/pending parsing this is the
+    # SAFE direction — a malformed (or contradictory deleted_tag+pending) value
+    # makes legitimate breadcrumbs/placeholders error LOUDLY rather than being
+    # silently and wrongly exempted.
+    deleted_pairs: set[tuple[str, str]] = set()
+    pending_pairs: set[tuple[str, str]] = set()
     try:
         rl_text = ahimsa_res.fetch_text(ahimsa_repo, "HEAD", "release-log.yaml")
     except Exception:
@@ -153,9 +164,13 @@ def validate_releases(
         try:
             from ahimsa.release_log import parse_release_log_text
             rl_entries = parse_release_log_text(rl_text)
-            exempt_pairs = {(e.repo, e.tag) for e in rl_entries if e.deleted_tag}
+            deleted_pairs = {(e.repo, e.tag) for e in rl_entries if e.deleted_tag}
+            pending_pairs = {(e.repo, e.tag) for e in rl_entries if e.pending}
         except (ValueError, ImportError):
-            exempt_pairs = set()
+            deleted_pairs = set()
+            pending_pairs = set()
+
+    exempt_pairs: set[tuple[str, str]] = deleted_pairs | pending_pairs
 
     all_entries = parse_entries(text)
 
@@ -197,14 +212,22 @@ def validate_releases(
         # Filter to in-scope tags only — non-conforming names are ignored.
         tag_set = {t for t in all_tags if TAG_RE.match(t)}
 
-        # --- Warn on stale exemptions: deleted_tag: true but tag STILL exists ---
+        # --- Warn on stale exemptions: flag set but tag STILL exists ---
         # The entry/tag pair is consistent (no drift), so this is not an error —
-        # only a data-quality issue worth surfacing for human attention.
-        for tag in sorted(t for s, t in exempt_pairs if s == slug and t in tag_set):
+        # only a data-quality issue worth surfacing for human attention. The
+        # deleted_tag and pending cases get distinct messages.
+        for tag in sorted(t for s, t in deleted_pairs if s == slug and t in tag_set):
             print(
                 f"WARNING: {slug} {tag} is marked deleted_tag=true in "
                 "release-log.yaml but the tag still exists on the remote. "
                 "Remove deleted_tag: true if the tag is intentionally present.",
+                file=sys.stderr,
+            )
+        for tag in sorted(t for s, t in pending_pairs if s == slug and t in tag_set):
+            print(
+                f"WARNING: {slug} {tag} is marked pending=true in "
+                "release-log.yaml but the tag now exists on the remote — the "
+                "release happened. Remove pending: true and fill in the entry.",
                 file=sys.stderr,
             )
 
@@ -216,10 +239,11 @@ def validate_releases(
                 "tag exists but no entry in RELEASES.md",
             ))
 
-        # Category B (entry but no tag) — exempt intentionally-absent breadcrumbs.
+        # Category B (entry but no tag) — exempt deleted_tag breadcrumbs AND
+        # pending forward-looking placeholders (exempt_pairs is their union).
         for tag in sorted(entry_set - tag_set):
             if (slug, tag) in exempt_pairs:
-                continue  # intentionally-absent breadcrumb: skip
+                continue  # intentionally-absent breadcrumb or pending placeholder: skip
             errors.append(Error(
                 f'releases.entry["{tag}"]',
                 "entry in RELEASES.md but tag does not exist",
@@ -239,9 +263,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ahimsa-validate-releases",
         description=(
-            "Audit RELEASES.md (in ahimsa) against git tag lists for all repos. "
-            "Opt-in by file presence; no-op if RELEASES.md is absent. "
-            "Repos are derived from recipe.json if not supplied on the command line."
+            "Audit RELEASES.md (in manomatika/manomatika) against git tag lists "
+            "for all repos. Opt-in by file presence; no-op if RELEASES.md is "
+            "absent. Repos are derived from recipe.json if not supplied on the "
+            "command line."
         ),
     )
     parser.add_argument(
