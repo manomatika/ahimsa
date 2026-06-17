@@ -66,6 +66,11 @@ This section captures the standing working rules across the manomatika ecosystem
 
 CLAUDE.md must never knowingly contain stale information. Whenever CLAUDE.md is edited or regenerated, every factual claim about this repo (workflow/job status, ownership boundaries, file locations, build/release state) must be verified against the actual current repo state before being written. Stale claims are defects. When a claim cannot be verified, omit it rather than guess.
 
+**Per-tag documentation triad.** CLAUDE.md, `CHANGELOG.md`, and `RELEASES.md`
+are updated for EVERY tag — both rc and final. (CHANGELOG.md is per-repo;
+`RELEASES.md` is generated from `manomatika/manomatika`'s `release-log.yaml` —
+see *Release-Notes System & Central Release Log* below.)
+
 ### Collaboration model
 
 - **Human in the loop for every change.** The user holds architecture, code review, and merge decisions. Don't merge PRs; don't push without explicit instruction; don't open PRs without the user's go-ahead.
@@ -127,6 +132,19 @@ engine enforces:
 
 - Recipes live at `recipes/<app>/recipe.json`. One directory per application. Asset paths inside the recipe (e.g. `application.icon`) are relative to the recipe's directory, not the repo root.
 - Recipes pin exact **bare-core** X.Y.Z versions. No ranges, no wildcards, no pre-release suffixes. Pre-release suffixes (`-dev`, `-rc.N`) are development/audit-only markers in source repos (matika, applugs) and live only on human/audit surfaces (VERSION string, git tags, release titles); recipes consume only the bare core. Note: a recipe's `tag` field is a git ref and MAY carry a suffix (e.g. `v0.0.4-rc.1`) — only the `version`/`matika_version`/`matika.version` **pin** fields must be bare core.
+- `matika_version` (per-applug, and `matika.version`) is the matika **framework compatibility pin** — the matika version the applug was built against — not a product version. It is always bare core.
+
+**Version ladder & CORE/SUFFIX contract.** The pre-release ladder is
+`X.Y.Z-dev` < `X.Y.Z-rc.N` < `X.Y.Z` (final); the dev marker is the
+SemVer-valid `-dev` (hyphen), never `_dev` (underscore). The version **CORE**
+(`X.Y.Z`) is canonical for ALL comparison, artifact/bundle naming, and
+OS/installer/`Info.plist` fields; the pre-release **suffix** (`-dev`, `-rc.N`)
+lives ONLY on human/audit surfaces (VERSION string, git tags, release
+titles/bodies, audit log). ahimsa does NOT own the canonical SemVer parser
+(`_parse_semver` / `version_core` / `is_prerelease`) — its source of truth is
+matika's `src/matika/core/paths.py`; ahimsa's validator only format-checks that
+recipe pin fields are bare core (regex `^\d+\.\d+\.\d+$`) and passes `tag`
+fields through to resolvers as opaque git refs.
 
 The reference-app recipe lives in `manomatika/manomatika` at
 `recipes/reference-app/recipe.json`, pinning matika v0.0.4 and eyerate v0.0.4
@@ -141,19 +159,33 @@ Ahimsa is an installable Python package (PEP 621, hatchling backend).
 ```
 ahimsa/                   — installable package (import as `ahimsa`)
   __init__.py             — exposes __version__ via importlib.metadata
-  validate_recipe.py      — validator library + CLI entry point
+  validate_recipe.py      — recipe validator + resolver protocol + CLI entry point
+  validate_releases.py    — release-log (RELEASES.md) validator + CLI entry point
+  release_log.py          — RELEASES.md renderer (merges release-log.yaml + live tags)
+  releases_grammar.py     — shared (repo, tag) heading grammar for validator + renderer
+  stub_resolver.py        — offline stub resolver used by tests/tooling
   _config.py              — config loader (walk-up algorithm)
 tests/                    — pytest test suite
   test_validate_recipe.py — unit tests (mock resolvers, no network)
-  test_invocation.py      — four subprocess invocation-style tests
+  test_validate_releases.py — release-log validator tests
+  test_release_log.py     — renderer tests
+  test_invocation.py      — subprocess invocation-style tests
   test_config_precedence.py — walk-up and --config precedence matrix
+  test_build_workflow.py  — build.yml workflow assertions
+  test_github_resolver_integration.py — real-network integration tier (opt-in)
   fixtures/               — per-scenario recipe + config fixtures
 scripts/
   build_standalone.py     — build orchestration (stubbed, not part of package)
+  make_dmg.py / _dmg_settings.py — DMG wrapper invoked by build.yml (macOS)
+  render_releases_md.py   — RELEASES.md render entry point (used by build.yml refresh job)
 VERSION                   — single source of version ("0.0.1-dev")
 pyproject.toml            — package metadata; hatchling reads VERSION at build time
 config.json               — project-level allowed_hosts (walked up from recipes/)
 ```
+
+Console scripts (`[project.scripts]`): `ahimsa-validate`
+(`ahimsa.validate_recipe:main`) and `ahimsa-validate-releases`
+(`ahimsa.validate_releases:main`).
 
 ## Development Install
 
