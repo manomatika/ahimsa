@@ -2,9 +2,10 @@ entries:
   - repo: matika
     tag: v0.0.4-dev.2
     date: "2026-05-07"
-    status: published
+    status: "published (tag subsequently deleted)"
     artifact: "@manomatika/matika-frontend@0.0.4-dev.2 (GitHub Packages)"
     prs: "manomatika/matika#37"
+    deleted_tag: true
     summary: >
       Adds the import map entry for @manomatika/matika-frontend in matika's
       base.html. Applugs (eyerate first) can now import the package via bare
@@ -16,9 +17,10 @@ entries:
   - repo: matika
     tag: v0.0.4-dev.1
     date: "2026-05-06"
-    status: published
+    status: "published (tag subsequently deleted)"
     artifact: "@manomatika/matika-frontend@0.0.4-dev.1 (GitHub Packages)"
     prs: "manomatika/matika@23de78d (direct-to-main lockfile fix; no PR opened)"
+    deleted_tag: true
     summary: >
       First successful publish of @manomatika/matika-frontend. Establishes
       the public TypeScript surface for applugs to consume: MaintenanceActivityManager,
@@ -32,6 +34,7 @@ entries:
     status: "superseded (by matika v0.0.4-dev.1)"
     artifact: "none (publish failed; breadcrumb only)"
     prs: "manomatika/matika#35"
+    deleted_tag: true
     summary: >
       First attempted publish of @manomatika/matika-frontend. The publish
       workflow failed in npm ci because package-lock.json was not committed to

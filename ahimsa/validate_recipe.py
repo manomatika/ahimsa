@@ -468,8 +468,8 @@ def validate(
     # release log is worth flagging regardless of recipe state. See
     # CLAUDE.md "Release Log Validation" for the full rationale.
     #
-    # The central RELEASES.md lives in ahimsa at github.com/manomatika/ahimsa.
-    # When tests inject resolvers, those resolvers also serve the ahimsa entry.
+    # The central RELEASES.md lives in manomatika/manomatika (product authority).
+    # When tests inject resolvers, those resolvers also serve the mm entry.
     # The recipe's allowed_hosts is NOT passed here: it governs which hosts the
     # recipe may reference, not which hosts ahimsa's own infrastructure uses.
     # Using allowed_hosts=None preserves the default ["github.com"] so the

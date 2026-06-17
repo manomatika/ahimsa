@@ -10,11 +10,12 @@ dynamic = ["version"]
 description = "Build, validation, and release system for Matika-based applications."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["requests"]
+# pyyaml: the release-log validator parses release-log.yaml (fetched from mm) at
+# runtime to build the deleted-tag exemption set, so it is a production dependency.
+dependencies = ["requests", "pyyaml"]
 
 [project.optional-dependencies]
-# pyyaml: parse .github/workflows/*.yml in the build-workflow structural tests.
-test = ["pytest", "pyyaml"]
+test = ["pytest"]
 
 [tool.hatch.version]
 path = "VERSION"
