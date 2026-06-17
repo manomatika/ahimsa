@@ -189,11 +189,30 @@ Console scripts (`[project.scripts]`): `ahimsa-validate`
 
 ## Development Install
 
+Two install surfaces, two purposes (see README "Installing the CLI" for the
+full rationale). On a Homebrew-Python / PEP 668 macOS host **never**
+`pip install` into the system interpreter and **never** use
+`--break-system-packages` — that is what produces stale, dangling
+`/opt/homebrew/bin/ahimsa-*` shims (`ModuleNotFoundError: No module named
+'ahimsa'`).
+
+**Tests** — a project venv:
+
 ```
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[test]"
+pytest tests/
 ```
 
-After install, all four invocation styles work:
+**Global on-PATH `ahimsa-*` commands** — pipx, editable so they track this
+source tree:
+
+```
+pipx install --editable ~/dev/projects/ahimsa   # exposes shims on ~/.local/bin
+# code edits are live; after a pyproject DEPENDENCY change: pipx reinstall ahimsa
+```
+
+With either install on `PATH`, all four invocation styles work:
 
 ```bash
 ahimsa-validate <path/to/recipe.json>                    # console-script entry point
