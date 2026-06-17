@@ -5,15 +5,16 @@ All tests run offline. Network-dependent behavior is intercepted by
 injecting BaseResolver subclasses via the `resolvers={"github.com": mock}`
 parameter, mirroring tests/test_validate_recipe.py.
 
-The central RELEASES.md now lives in ahimsa. Headings use the two-part form
-``## <repo-slug> <tag>`` (e.g. ``## matika v0.0.4``). The validator fetches
-RELEASES.md from ahimsa once and audits each repo's tag list against the
-entries for that slug.
+The central RELEASES.md lives in manomatika/manomatika (product authority).
+Headings use the two-part form ``## <repo-slug> <tag>`` (e.g. ``## matika
+v0.0.4``). The validator fetches RELEASES.md once and audits each repo's tag
+list against the entries for that slug.
 
 For single-repo tests we pass ``ahimsa_repo=REPO`` so the same mock instance
-serves both the RELEASES.md fetch (from "ahimsa") and the tag-list fetch (from
-the target repo). For multi-repo tests the mock must have an explicit ahimsa
-entry.
+serves both the RELEASES.md fetch and the tag-list fetch (from the target
+repo). The ``ahimsa_repo`` parameter name is retained for backward
+compatibility; it now refers to the product-authority repo (mm). For
+multi-repo tests the mock must have an explicit RELEASES.md-host entry.
 """
 
 import json
@@ -627,6 +628,162 @@ def test_malformed_release_log_collapses_exemptions_and_errors_loudly():
     )
     assert len(errors) == 1
     assert errors[0].pointer == 'releases.entry["v0.0.4-dev.0"]'
+
+
+# ---------------------------------------------------------------------------
+# validate_releases — pending exemption (forward-looking placeholders)
+# ---------------------------------------------------------------------------
+
+
+def _release_log_yaml_flagged(*entries: tuple[str, bool | None, bool | None]) -> str:
+    """Build a minimal release-log.yaml for matika entries with both flags.
+
+    Each entry is ``(tag, deleted_tag, pending)``; a ``None`` flag omits its
+    field entirely (so the parser sees absence, not an explicit ``false``).
+    """
+    lines = ["entries:"]
+    for tag, deleted, pending in entries:
+        lines.append("  - repo: matika")
+        lines.append(f"    tag: {tag}")
+        lines.append('    date: "2026-05-06"')
+        lines.append("    status: published")
+        lines.append('    artifact: "none"')
+        lines.append('    prs: "manomatika/matika#1"')
+        if deleted is not None:
+            lines.append(f"    deleted_tag: {'true' if deleted else 'false'}")
+        if pending is not None:
+            lines.append(f"    pending: {'true' if pending else 'false'}")
+        lines.append('    summary: "test entry"')
+    return "\n".join(lines) + "\n"
+
+
+def test_pending_absent_tag_is_exempted():
+    """Entry marked pending=true, tag absent from remote -> no error."""
+    text = "## matika v0.0.5\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=[],
+        release_log=_release_log_yaml_flagged(("v0.0.5", None, True)),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert errors == []
+
+
+def test_unmarked_absent_tag_still_errors_without_pending():
+    """Entry WITHOUT pending but tag absent -> still errors (explicit opt-in)."""
+    text = "## matika v0.0.5\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=[],
+        release_log=_release_log_yaml_flagged(("v0.0.5", None, None)),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert len(errors) == 1
+    assert errors[0].pointer == 'releases.entry["v0.0.5"]'
+    assert "tag does not exist" in errors[0].message
+
+
+def test_pending_does_not_suppress_category_a():
+    """Regression: Category A (tag but no entry) is unaffected by pending."""
+    text = "## matika v0.0.5\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=["v0.0.4"],  # v0.0.4 has no entry; v0.0.5 entry is pending
+        release_log=_release_log_yaml_flagged(("v0.0.5", None, True)),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert len(errors) == 1
+    assert errors[0].pointer == 'releases.tag["v0.0.4"]'
+    assert "tag exists but no entry" in errors[0].message
+
+
+def test_pending_tag_now_exists_emits_warning(capsys):
+    """Edge case: pending=true but the tag now exists -> warning, no error."""
+    text = "## matika v0.0.5\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=["v0.0.5"],  # the release happened
+        release_log=_release_log_yaml_flagged(("v0.0.5", None, True)),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert errors == []
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "pending=true" in captured.err
+
+
+def test_mixed_pending_and_nonexempt_absent_entries():
+    """Multiple absent entries; only the pending-marked one is exempted."""
+    text = "## matika v0.0.5\n## matika v0.0.6\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=[],  # neither tag exists
+        release_log=_release_log_yaml_flagged(
+            ("v0.0.5", None, True),
+            ("v0.0.6", None, None),
+        ),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert len(errors) == 1
+    assert errors[0].pointer == 'releases.entry["v0.0.6"]'
+
+
+def test_pending_and_deleted_tag_contradiction_collapses_and_errors_loudly():
+    """An entry marked BOTH pending and deleted_tag raises in the parser, which
+    (fail-open) collapses the exemption set to empty -> the entry errors LOUDLY
+    rather than being silently exempted. Mirrors the malformed-value behavior."""
+    text = "## matika v0.0.5\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=[],
+        release_log=_release_log_yaml_flagged(("v0.0.5", True, True)),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert len(errors) == 1
+    assert errors[0].pointer == 'releases.entry["v0.0.5"]'
+
+
+def test_pending_and_deleted_tag_coexist_on_distinct_entries():
+    """deleted_tag and pending on SEPARATE entries both exempt correctly."""
+    text = "## matika v0.0.4-dev.0\n## matika v0.0.5\n"
+    mock = _ReleasesMock(
+        releases_md=text,
+        tags=[],  # neither tag exists
+        release_log=_release_log_yaml_flagged(
+            ("v0.0.4-dev.0", True, None),  # deleted breadcrumb
+            ("v0.0.5", None, True),        # pending placeholder
+        ),
+    )
+    errors = validate_releases(
+        [REPO],
+        ahimsa_repo=REPO,
+        resolvers={"github.com": mock},
+    )
+    assert errors == []
 
 
 # ---------------------------------------------------------------------------

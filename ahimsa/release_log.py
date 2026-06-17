@@ -41,6 +41,7 @@ class ReleaseEntry:
     prs: str
     summary: str
     deleted_tag: bool = False
+    pending: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -51,18 +52,19 @@ class ReleaseEntry:
 _REQUIRED_FIELDS = ("repo", "tag", "date", "status", "artifact", "prs", "summary")
 
 
-def _coerce_deleted_tag(value: Any, index: int, item: dict) -> bool:
-    """Strictly interpret an entry's optional ``deleted_tag`` field.
+def _coerce_bool_field(value: Any, field: str, index: int, item: dict) -> bool:
+    """Strictly interpret an entry's optional boolean exemption field.
 
-    ``deleted_tag`` is an audit-integrity field: it SUPPRESSES the "entry but no
-    tag" safety check, so a misparse toward exemption is the dangerous direction.
-    A permissive ``bool(value)`` would coerce the quoted YAML string ``"false"``
-    to ``True`` (Python truthiness), wrongly exempting an entry. We therefore
-    accept ONLY a genuine YAML boolean or absence:
+    Both ``deleted_tag`` and ``pending`` are audit-integrity fields: each
+    SUPPRESSES the "entry but no tag" safety check, so a misparse toward
+    exemption is the dangerous direction. A permissive ``bool(value)`` would
+    coerce the quoted YAML string ``"false"`` to ``True`` (Python truthiness),
+    wrongly exempting an entry. We therefore accept ONLY a genuine YAML boolean
+    or absence:
 
       - absent / null  -> False
       - real bool      -> that bool
-      - anything else  -> ValueError naming the entry and the offending value
+      - anything else  -> ValueError naming the field, entry, and offending value
     """
     if value is None:
         return False
@@ -70,7 +72,7 @@ def _coerce_deleted_tag(value: Any, index: int, item: dict) -> bool:
         return value
     label = f"{item.get('repo', '?')} {item.get('tag', '?')}"
     raise ValueError(
-        f"release-log.yaml entry [{index}] ({label}): 'deleted_tag' must be a "
+        f"release-log.yaml entry [{index}] ({label}): '{field}' must be a "
         f"YAML boolean (true/false) or absent, got {value!r}"
     )
 
@@ -79,8 +81,11 @@ def parse_release_log_text(text: str) -> list[ReleaseEntry]:
     """Parse release-log.yaml *content* (a string) into ReleaseEntry objects.
 
     Requires PyYAML. Raises ImportError if pyyaml is not installed; ValueError
-    if the YAML is malformed, missing required fields, or carries a non-boolean
-    ``deleted_tag`` value (strict parsing — see ``_coerce_deleted_tag``).
+    if the YAML is malformed, missing required fields, carries a non-boolean
+    ``deleted_tag``/``pending`` value (strict parsing — see
+    ``_coerce_bool_field``), or marks an entry as BOTH ``deleted_tag: true`` and
+    ``pending: true`` (a contradiction — a release cannot be simultaneously
+    not-yet-created and deleted).
     """
     try:
         import yaml
@@ -102,6 +107,15 @@ def parse_release_log_text(text: str) -> list[ReleaseEntry]:
             raise ValueError(
                 f"release-log.yaml entry [{i}] missing required fields: {missing}"
             )
+        deleted_tag = _coerce_bool_field(item.get("deleted_tag"), "deleted_tag", i, item)
+        pending = _coerce_bool_field(item.get("pending"), "pending", i, item)
+        if deleted_tag and pending:
+            label = f"{item.get('repo', '?')} {item.get('tag', '?')}"
+            raise ValueError(
+                f"release-log.yaml entry [{i}] ({label}): 'deleted_tag' and "
+                f"'pending' cannot both be true — a release cannot be "
+                f"simultaneously not-yet-created (pending) and deleted."
+            )
         entries.append(ReleaseEntry(
             repo=str(item["repo"]),
             tag=str(item["tag"]),
@@ -110,7 +124,8 @@ def parse_release_log_text(text: str) -> list[ReleaseEntry]:
             artifact=str(item["artifact"]),
             prs=str(item["prs"]),
             summary=str(item["summary"]).strip(),
-            deleted_tag=_coerce_deleted_tag(item.get("deleted_tag"), i, item),
+            deleted_tag=deleted_tag,
+            pending=pending,
         ))
     return entries
 
