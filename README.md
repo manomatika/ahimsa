@@ -65,13 +65,80 @@ no ranges, no wildcards.
 
 ---
 
-## Validation Rules
+## Installing the CLI
 
-After installing ahimsa with `pip install -e ".[test]"`, run:
+ahimsa ships two console scripts — `ahimsa-validate` and
+`ahimsa-validate-releases`. There are two distinct ways to install, for two
+distinct purposes; pick by what you need.
+
+### Global commands (use the CLI from any directory): **pipx**
+
+On a Homebrew-Python / PEP 668 "externally-managed" macOS system you must **not**
+`pip install` into the system interpreter (it is refused, and forcing it with
+`--break-system-packages` pollutes — and eventually corrupts — the Homebrew
+Python). The blessed tool for installing a Python CLI globally on such a system
+is [pipx](https://pipx.pypa.io/): it puts the app in its own isolated venv and
+exposes the console scripts on `~/.local/bin` (which is on `PATH`).
+
+Because ahimsa is actively developed locally, install it **editable** so the
+global commands always track the canonical source tree:
+
+```bash
+brew install pipx        # one-time, if not already installed
+pipx ensurepath          # one-time, ensures ~/.local/bin is on PATH
+
+# editable install from your local clone — the global commands track the source:
+pipx install --editable ~/dev/projects/ahimsa
+```
+
+Now `ahimsa-validate` / `ahimsa-validate-releases` work by bare name from any
+directory:
 
 ```bash
 ahimsa-validate <path/to/recipe.json>
-# or, equivalently:
+ahimsa-validate-releases github.com/manomatika/matika  ...
+```
+
+Verify the on-PATH command is the pipx one (a single shim) and is backed by the
+source tree:
+
+```bash
+which -a ahimsa-validate-releases     # -> ~/.local/bin/ahimsa-validate-releases (only)
+```
+
+Notes / durability:
+- Editable means **code** edits are picked up immediately. If `pyproject.toml`
+  **dependencies** change, refresh the isolated venv with
+  `pipx reinstall ahimsa`.
+- Do **not** `pip install` ahimsa into the Homebrew system Python. A stale
+  system-Python editable install (e.g. one whose source dir was later removed)
+  leaves dangling `/opt/homebrew/bin/ahimsa-*` shims that fail with
+  `ModuleNotFoundError: No module named 'ahimsa'`. If you ever hit that, the
+  fix is to remove the stale artifacts (the two `bin` shims plus the
+  `ahimsa-*.dist-info/` and `_editable_impl_ahimsa.pth` recorded in the
+  dist-info `RECORD`) and reinstall via pipx as above — never
+  `--break-system-packages`.
+
+### Running the test suite: a project virtualenv
+
+pipx's isolated venv is for *running* the CLI, not for development/testing. To
+run the tests, use a normal project venv (this is the standard pipx dev-workflow
+split — global CLI via pipx, tests via a venv):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[test]"
+pytest
+```
+
+## Validation Rules
+
+Once the CLI is installed (see **Installing the CLI** above), run:
+
+```bash
+ahimsa-validate <path/to/recipe.json>
+# or, equivalently, with any interpreter that has ahimsa importable:
 python -m ahimsa.validate_recipe <path/to/recipe.json>
 ```
 
