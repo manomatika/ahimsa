@@ -46,6 +46,8 @@ jobs:
         run: pip install -e .
 
       - name: Validate recipe (fail fast)
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: ahimsa-validate "$RECIPE_PATH"
 
   # ---------------------------------------------------------------------------
@@ -609,6 +611,7 @@ jobs:
         env:
           RELEASE_LOG_PATH: mm/release-log.yaml
           RELEASES_MD_PATH: mm/RELEASES.md
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: python scripts/render_releases_md.py
 
       - name: Open PR to manomatika/manomatika with updated RELEASES.md
