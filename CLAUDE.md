@@ -147,10 +147,13 @@ recipe pin fields are bare core (regex `^\d+\.\d+\.\d+$`) and passes `tag`
 fields through to resolvers as opaque git refs.
 
 The reference-app recipe lives in `manomatika/manomatika` at
-`recipes/reference-app/recipe.json`, pinning matika v0.0.4 and eyerate v0.0.4
-from `github.com/manomatika/matika` and `github.com/manomatika/eyerate`.
-`build.yml`'s `workflow_dispatch` fetches it from mm at the path given by the
-`recipe_path` input (default `recipes/reference-app/recipe.json`).
+`recipes/reference-app/recipe.json`, with version pins (bare core) `0.0.4` for
+matika and for the eyerate applug, and git-ref `tag` fields set to `v0.0.4-rc.1`
+for both — from `github.com/manomatika/matika` and `github.com/manomatika/eyerate`.
+This is the canonical example of the CORE/SUFFIX contract in action: version pins
+stay bare core; tags MAY carry a pre-release suffix. `build.yml`'s
+`workflow_dispatch` fetches it from mm at the path given by the `recipe_path`
+input (default `recipes/reference-app/recipe.json`).
 
 ## Package Layout
 
@@ -170,6 +173,7 @@ tests/                    — pytest test suite
   test_validate_releases.py — release-log validator tests
   test_release_log.py     — renderer tests
   test_invocation.py      — subprocess invocation-style tests
+  test_packaging.py       — console-script entry-point contract (pyproject declarations, import resolution, installed-metadata path)
   test_config_precedence.py — walk-up and --config precedence matrix
   test_build_workflow.py  — build.yml workflow assertions
   test_github_resolver_integration.py — real-network integration tier (opt-in)
@@ -356,13 +360,12 @@ log a between-release / single-repo hotfix tag without a full manomatika release
 
 - **`validate.yml`** — runs on every push and PR to `main`. Installs
   `pip install -e ".[test]"`, runs `pytest tests/`. A live recipe-validation
-  step is present but commented out with a TODO (tracked by
-  `manomatika/ahimsa#60`) to re-enable once `manomatika/matika` and
-  `manomatika/eyerate` publish their v0.0.4 (or v0.0.4-rc.N) tags — the live
-  remote-fetch step fails until those tags exist; unit tests cover all
-  validator logic via mocks. Because the validator format-checks only the
-  bare-core version pins (tags are git refs, not checked), the step can be
-  re-enabled at **rc** time, not only at final.
+  step is present but commented out, tracked by
+  `manomatika/ahimsa#60`. The blocker condition (v0.0.4-rc.1 tags for matika
+  and eyerate) was met on 2026-06-17; re-enabling is now actionable. Until
+  re-enabled, unit tests cover all validator logic via mocks. Because the
+  validator format-checks only the bare-core version pins (tags are git refs,
+  not version-checked), the step can be re-enabled at rc time.
 - **`build.yml`** — runs on `workflow_dispatch` only (with a `recipe_path`
   input). The `push: tags: v*` trigger and the `release` job have been removed;
   ahimsa builds artifacts on demand, never creates GitHub releases. Jobs:
