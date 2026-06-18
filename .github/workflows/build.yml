@@ -20,9 +20,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Fetch recipe from manomatika/manomatika
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           mkdir -p "$(dirname "$RECIPE_PATH")"
           gh api -H "Accept: application/vnd.github.raw+json" \
@@ -50,9 +60,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Fetch recipe from manomatika/manomatika
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           mkdir -p "$(dirname "$RECIPE_PATH")"
           gh api -H "Accept: application/vnd.github.raw+json" \
@@ -103,6 +123,11 @@ jobs:
           print(f"Matika   : {matika_v} ({matika_tag})")
           print(f"Repo     : {matika_repo}")
           PYEOF
+
+      - name: Configure git credentials for GitHub App token
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
 
       - name: Clone Matika at declared version
         shell: bash
@@ -205,9 +230,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Fetch recipe from manomatika/manomatika
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           mkdir -p "$(dirname "$RECIPE_PATH")"
           gh api -H "Accept: application/vnd.github.raw+json" \
@@ -258,6 +293,11 @@ jobs:
           print(f"Matika   : {matika_v} ({matika_tag})")
           print(f"Repo     : {matika_repo}")
           PYEOF
+
+      - name: Configure git credentials for GitHub App token
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
 
       - name: Clone Matika at declared version
         shell: bash
@@ -360,10 +400,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Fetch recipe from manomatika/manomatika
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           mkdir -p "$(dirname "$RECIPE_PATH")"
           gh api -H "Accept: application/vnd.github.raw+json" \
@@ -414,6 +464,12 @@ jobs:
           print(f"Matika   : {matika_v} ({matika_tag})")
           print(f"Repo     : {matika_repo}")
           PYEOF
+
+      - name: Configure git credentials for GitHub App token
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
 
       - name: Clone Matika at declared version
         shell: bash
@@ -520,18 +576,27 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout ahimsa (render script + package)
         uses: actions/checkout@v6
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Checkout manomatika/manomatika (release-log.yaml + RELEASES.md)
         uses: actions/checkout@v6
         with:
           repository: manomatika/manomatika
           path: mm
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
@@ -547,7 +612,10 @@ jobs:
         run: python scripts/render_releases_md.py
 
       - name: Open PR to manomatika/manomatika with updated RELEASES.md
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
+          gh auth setup-git
           cd mm
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
