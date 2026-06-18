@@ -133,6 +133,8 @@ jobs:
 
       - name: Clone Matika at declared version
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
           MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
@@ -141,6 +143,8 @@ jobs:
 
       - name: Clone AppLugs into build/matika/plugins/
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           python3 - <<'PYEOF'
           import json, os, subprocess
@@ -303,6 +307,8 @@ jobs:
 
       - name: Clone Matika at declared version
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
           MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
@@ -311,6 +317,8 @@ jobs:
 
       - name: Clone AppLugs into build/matika/plugins/
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           python3 - <<'PYEOF'
           import json, os, subprocess
@@ -475,6 +483,8 @@ jobs:
 
       - name: Clone Matika at declared version
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
           MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
@@ -483,6 +493,8 @@ jobs:
 
       - name: Clone AppLugs into build/matika/plugins/
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           python3 - <<'PYEOF'
           import json, os, subprocess
@@ -622,10 +634,14 @@ jobs:
           cd mm
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add RELEASES.md
+          if git diff --quiet --cached; then
+            echo "RELEASES.md is already up to date — skipping branch, push, and PR."
+            exit 0
+          fi
           BRANCH="auto/refresh-releases-md-$(date +%Y%m%d-%H%M%S)"
           git checkout -b "$BRANCH"
-          git add RELEASES.md
-          git commit -m "chore: refresh RELEASES.md from release-log.yaml" || echo "No changes"
+          git commit -m "chore: refresh RELEASES.md from release-log.yaml"
           git push origin "$BRANCH"
           gh pr create \
             --repo manomatika/manomatika \
