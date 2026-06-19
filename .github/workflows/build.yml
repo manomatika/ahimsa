@@ -555,7 +555,7 @@ jobs:
           REM into a single installer EXE. All values are passed in as /D defines
           REM so the .iss script carries no hardcoded version or path — AppVersion
           REM and the source bundle are dynamic per the recipe.
-          set "BUNDLE_DIR=build\matika\dist\Matika-%MATIKA_VERSION%"
+          set "BUNDLE_DIR=%CD%\build\matika\dist\Matika-%MATIKA_VERSION%"
           set "OUTPUT_BASENAME=%APP_SLUG%-%APP_VERSION%-windows-x86_64"
           if not exist "%BUNDLE_DIR%" (
             echo ::error::Expected PyInstaller bundle dir not found: %BUNDLE_DIR%
