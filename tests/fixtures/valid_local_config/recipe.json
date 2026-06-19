@@ -1,6 +1,7 @@
 {
   "application": {
     "name": "Invocation Test App",
+    "product_name": "TestProduct",
     "version": "0.0.1",
     "bundle_id": "com.test.invocation",
     "icon": "icon.icns"

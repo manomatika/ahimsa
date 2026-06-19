@@ -100,29 +100,34 @@ jobs:
           path = os.environ["RECIPE_PATH"]
           with open(path) as f:
               r = json.load(f)
-          name        = r["application"]["name"]
-          slug        = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-          version     = r["application"]["version"]
-          matika_v    = r["matika"]["version"]
-          matika_repo = r["matika"]["repo"]
+          app = r["application"]
+          # PRODUCT identity drives every user-facing artifact/bundle name. The
+          # filename slug is the product name lower-cased + slugified (lowercase
+          # artifact-filename convention); the proper-noun product_name is used
+          # verbatim for the installed .app / .exe identity. The PRODUCT version
+          # (application.version) — NOT matika's framework version — is embedded
+          # in artifact names and the installed identity.
+          product_name = app["product_name"]
+          product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
+          product_ver  = app["version"]
+          matika_repo  = r["matika"]["repo"]
           # The recipe pins matika by explicit tag (recipe.matika.tag), the
           # same way each applug is pinned by its own tag. Use it directly
           # rather than deriving "v{version}" so the recipe stays the single
           # source of truth for what gets checked out.
-          matika_tag  = r["matika"]["tag"]
+          matika_tag   = r["matika"]["tag"]
           if not matika_repo.startswith("http"):
               matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
           with open(out, "a") as f:
-              f.write(f"app_name={name}\n")
-              f.write(f"app_slug={slug}\n")
-              f.write(f"app_version={version}\n")
-              f.write(f"matika_version={matika_v}\n")
+              f.write(f"product_name={product_name}\n")
+              f.write(f"product_slug={product_slug}\n")
+              f.write(f"product_version={product_ver}\n")
               f.write(f"matika_repo={matika_repo}\n")
               f.write(f"matika_tag={matika_tag}\n")
-          print(f"App      : {name} v{version}")
-          print(f"Slug     : {slug}")
-          print(f"Matika   : {matika_v} ({matika_tag})")
+          print(f"Product  : {product_name} v{product_ver}")
+          print(f"Slug     : {product_slug}")
+          print(f"Matika   : {matika_tag}")
           print(f"Repo     : {matika_repo}")
           PYEOF
 
@@ -172,17 +177,27 @@ jobs:
           npm install
           npm run build
 
-      - name: Run PyInstaller (freeze Matika.app)
+      - name: Run PyInstaller (freeze the product bundle)
         shell: bash
         working-directory: build/matika
+        env:
+          # Drive the frozen artifact's identity from the recipe's product
+          # fields so the bundle is <product_name>-<product_version> (e.g.
+          # ManoMatika-0.0.1), not the matika component name/version.
+          # matika.spec defaults to "Matika" + its own VERSION only for
+          # standalone dev builds where neither env var is set.
+          MATIKA_PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          MATIKA_PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
         run: |
-          # CORE/SUFFIX CONTRACT (cross-repo with manomatika/matika):
-          # matika.spec reads matika's own VERSION, strips any pre-release
-          # suffix (-dev / -rc.N) to BARE CORE, and emits dist/Matika-<core>.app
-          # plus the dist/Matika-<core>/ COLLECT tree. The bare core equals the
-          # recipe's matika.version pin (validator-enforced X.Y.Z), so the
-          # MATIKA_VERSION output used below to locate the bundle matches the
-          # spec's name even when the build runs at an rc TAG (e.g. v0.0.4-rc.1).
+          # CORE/SUFFIX + PRODUCT-IDENTITY CONTRACT (cross-repo with
+          # manomatika/matika): matika.spec reads MATIKA_PRODUCT_NAME and
+          # MATIKA_PRODUCT_VERSION (set above from the recipe's product fields),
+          # strips any pre-release suffix (-dev / -rc.N) from the version to
+          # BARE CORE, and emits dist/<product_name>-<core>.app plus the
+          # dist/<product_name>-<core>/ COLLECT tree (e.g. ManoMatika-0.0.1).
+          # So the bundle is named after the PRODUCT, not the matika component,
+          # and the DMG/installer steps below locate it by the same product
+          # name + product version even when the build runs at an rc TAG.
           # Plugins cloned into plugins/ are bundled by launcher.py at first run,
           # not by the spec. Run from the cloned matika root so the spec's
           # SPEC-relative paths (src/, launcher.py, VERSION) resolve.
@@ -193,19 +208,20 @@ jobs:
       - name: Build DMG (dmgbuild)
         shell: bash
         env:
-          APP_SLUG: ${{ steps.recipe_info.outputs.app_slug }}
-          APP_NAME: ${{ steps.recipe_info.outputs.app_name }}
-          APP_VERSION: ${{ steps.recipe_info.outputs.app_version }}
-          MATIKA_VERSION: ${{ steps.recipe_info.outputs.matika_version }}
+          PRODUCT_SLUG: ${{ steps.recipe_info.outputs.product_slug }}
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
           DMG_ARCH: arm64
         run: |
           # Wrap the PyInstaller .app bundle in a DMG via the dmgbuild library.
-          # matika.spec emits Matika-<bare-core>.app (suffix stripped); MATIKA_VERSION
-          # is the recipe's bare-core matika.version, so this path matches even at an
-          # rc tag. The DMG filename follows ahimsa's convention
-          # <slug>-<app_version>-macos-<arch>.dmg.
-          APP_BUNDLE="build/matika/dist/Matika-${MATIKA_VERSION}.app"
-          DMG_NAME="${APP_SLUG}-${APP_VERSION}-macos-${DMG_ARCH}.dmg"
+          # matika.spec emits <product_name>-<product-core>.app (suffix
+          # stripped), driven by the MATIKA_PRODUCT_* env passed to the
+          # PyInstaller step — so the installed bundle is named after the
+          # PRODUCT (e.g. ManoMatika-0.0.1.app), not the matika component. The
+          # DMG filename follows ahimsa's lowercase convention
+          # <product_slug>-<product_version>-macos-<arch>.dmg.
+          APP_BUNDLE="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}.app"
+          DMG_NAME="${PRODUCT_SLUG}-${PRODUCT_VERSION}-macos-${DMG_ARCH}.dmg"
           if [ ! -d "$APP_BUNDLE" ]; then
             echo "::error::Expected app bundle not found: $APP_BUNDLE"
             ls -la build/matika/dist || true
@@ -213,7 +229,7 @@ jobs:
           fi
           python3 scripts/make_dmg.py \
             --app "$APP_BUNDLE" \
-            --volname "${APP_NAME} ${APP_VERSION}" \
+            --volname "${PRODUCT_NAME} ${PRODUCT_VERSION}" \
             --output "$DMG_NAME"
           echo "Built DMG:"
           ls -la "$DMG_NAME"
@@ -221,8 +237,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg
-          path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg
+          name: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-macos-arm64.dmg
+          path: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-macos-arm64.dmg
 
   # ---------------------------------------------------------------------------
   # BUILD — macOS Intel (macos-15-intel)
@@ -274,29 +290,34 @@ jobs:
           path = os.environ["RECIPE_PATH"]
           with open(path) as f:
               r = json.load(f)
-          name        = r["application"]["name"]
-          slug        = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-          version     = r["application"]["version"]
-          matika_v    = r["matika"]["version"]
-          matika_repo = r["matika"]["repo"]
+          app = r["application"]
+          # PRODUCT identity drives every user-facing artifact/bundle name. The
+          # filename slug is the product name lower-cased + slugified (lowercase
+          # artifact-filename convention); the proper-noun product_name is used
+          # verbatim for the installed .app / .exe identity. The PRODUCT version
+          # (application.version) — NOT matika's framework version — is embedded
+          # in artifact names and the installed identity.
+          product_name = app["product_name"]
+          product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
+          product_ver  = app["version"]
+          matika_repo  = r["matika"]["repo"]
           # The recipe pins matika by explicit tag (recipe.matika.tag), the
           # same way each applug is pinned by its own tag. Use it directly
           # rather than deriving "v{version}" so the recipe stays the single
           # source of truth for what gets checked out.
-          matika_tag  = r["matika"]["tag"]
+          matika_tag   = r["matika"]["tag"]
           if not matika_repo.startswith("http"):
               matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
           with open(out, "a") as f:
-              f.write(f"app_name={name}\n")
-              f.write(f"app_slug={slug}\n")
-              f.write(f"app_version={version}\n")
-              f.write(f"matika_version={matika_v}\n")
+              f.write(f"product_name={product_name}\n")
+              f.write(f"product_slug={product_slug}\n")
+              f.write(f"product_version={product_ver}\n")
               f.write(f"matika_repo={matika_repo}\n")
               f.write(f"matika_tag={matika_tag}\n")
-          print(f"App      : {name} v{version}")
-          print(f"Slug     : {slug}")
-          print(f"Matika   : {matika_v} ({matika_tag})")
+          print(f"Product  : {product_name} v{product_ver}")
+          print(f"Slug     : {product_slug}")
+          print(f"Matika   : {matika_tag}")
           print(f"Repo     : {matika_repo}")
           PYEOF
 
@@ -346,17 +367,27 @@ jobs:
           npm install
           npm run build
 
-      - name: Run PyInstaller (freeze Matika.app)
+      - name: Run PyInstaller (freeze the product bundle)
         shell: bash
         working-directory: build/matika
+        env:
+          # Drive the frozen artifact's identity from the recipe's product
+          # fields so the bundle is <product_name>-<product_version> (e.g.
+          # ManoMatika-0.0.1), not the matika component name/version.
+          # matika.spec defaults to "Matika" + its own VERSION only for
+          # standalone dev builds where neither env var is set.
+          MATIKA_PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          MATIKA_PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
         run: |
-          # CORE/SUFFIX CONTRACT (cross-repo with manomatika/matika):
-          # matika.spec reads matika's own VERSION, strips any pre-release
-          # suffix (-dev / -rc.N) to BARE CORE, and emits dist/Matika-<core>.app
-          # plus the dist/Matika-<core>/ COLLECT tree. The bare core equals the
-          # recipe's matika.version pin (validator-enforced X.Y.Z), so the
-          # MATIKA_VERSION output used below to locate the bundle matches the
-          # spec's name even when the build runs at an rc TAG (e.g. v0.0.4-rc.1).
+          # CORE/SUFFIX + PRODUCT-IDENTITY CONTRACT (cross-repo with
+          # manomatika/matika): matika.spec reads MATIKA_PRODUCT_NAME and
+          # MATIKA_PRODUCT_VERSION (set above from the recipe's product fields),
+          # strips any pre-release suffix (-dev / -rc.N) from the version to
+          # BARE CORE, and emits dist/<product_name>-<core>.app plus the
+          # dist/<product_name>-<core>/ COLLECT tree (e.g. ManoMatika-0.0.1).
+          # So the bundle is named after the PRODUCT, not the matika component,
+          # and the DMG/installer steps below locate it by the same product
+          # name + product version even when the build runs at an rc TAG.
           # Plugins cloned into plugins/ are bundled by launcher.py at first run,
           # not by the spec. Run from the cloned matika root so the spec's
           # SPEC-relative paths (src/, launcher.py, VERSION) resolve.
@@ -367,19 +398,20 @@ jobs:
       - name: Build DMG (dmgbuild)
         shell: bash
         env:
-          APP_SLUG: ${{ steps.recipe_info.outputs.app_slug }}
-          APP_NAME: ${{ steps.recipe_info.outputs.app_name }}
-          APP_VERSION: ${{ steps.recipe_info.outputs.app_version }}
-          MATIKA_VERSION: ${{ steps.recipe_info.outputs.matika_version }}
+          PRODUCT_SLUG: ${{ steps.recipe_info.outputs.product_slug }}
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
           DMG_ARCH: x86_64
         run: |
           # Wrap the PyInstaller .app bundle in a DMG via the dmgbuild library.
-          # matika.spec emits Matika-<bare-core>.app (suffix stripped); MATIKA_VERSION
-          # is the recipe's bare-core matika.version, so this path matches even at an
-          # rc tag. The DMG filename follows ahimsa's convention
-          # <slug>-<app_version>-macos-<arch>.dmg.
-          APP_BUNDLE="build/matika/dist/Matika-${MATIKA_VERSION}.app"
-          DMG_NAME="${APP_SLUG}-${APP_VERSION}-macos-${DMG_ARCH}.dmg"
+          # matika.spec emits <product_name>-<product-core>.app (suffix
+          # stripped), driven by the MATIKA_PRODUCT_* env passed to the
+          # PyInstaller step — so the installed bundle is named after the
+          # PRODUCT (e.g. ManoMatika-0.0.1.app), not the matika component. The
+          # DMG filename follows ahimsa's lowercase convention
+          # <product_slug>-<product_version>-macos-<arch>.dmg.
+          APP_BUNDLE="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}.app"
+          DMG_NAME="${PRODUCT_SLUG}-${PRODUCT_VERSION}-macos-${DMG_ARCH}.dmg"
           if [ ! -d "$APP_BUNDLE" ]; then
             echo "::error::Expected app bundle not found: $APP_BUNDLE"
             ls -la build/matika/dist || true
@@ -387,7 +419,7 @@ jobs:
           fi
           python3 scripts/make_dmg.py \
             --app "$APP_BUNDLE" \
-            --volname "${APP_NAME} ${APP_VERSION}" \
+            --volname "${PRODUCT_NAME} ${PRODUCT_VERSION}" \
             --output "$DMG_NAME"
           echo "Built DMG:"
           ls -la "$DMG_NAME"
@@ -395,8 +427,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-x86_64.dmg
-          path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-x86_64.dmg
+          name: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-macos-x86_64.dmg
+          path: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-macos-x86_64.dmg
 
   # ---------------------------------------------------------------------------
   # BUILD — Windows x86_64
@@ -449,29 +481,34 @@ jobs:
           path = os.environ["RECIPE_PATH"]
           with open(path) as f:
               r = json.load(f)
-          name        = r["application"]["name"]
-          slug        = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-          version     = r["application"]["version"]
-          matika_v    = r["matika"]["version"]
-          matika_repo = r["matika"]["repo"]
+          app = r["application"]
+          # PRODUCT identity drives every user-facing artifact/bundle name. The
+          # filename slug is the product name lower-cased + slugified (lowercase
+          # artifact-filename convention); the proper-noun product_name is used
+          # verbatim for the installed .app / .exe identity. The PRODUCT version
+          # (application.version) — NOT matika's framework version — is embedded
+          # in artifact names and the installed identity.
+          product_name = app["product_name"]
+          product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
+          product_ver  = app["version"]
+          matika_repo  = r["matika"]["repo"]
           # The recipe pins matika by explicit tag (recipe.matika.tag), the
           # same way each applug is pinned by its own tag. Use it directly
           # rather than deriving "v{version}" so the recipe stays the single
           # source of truth for what gets checked out.
-          matika_tag  = r["matika"]["tag"]
+          matika_tag   = r["matika"]["tag"]
           if not matika_repo.startswith("http"):
               matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
           with open(out, "a") as f:
-              f.write(f"app_name={name}\n")
-              f.write(f"app_slug={slug}\n")
-              f.write(f"app_version={version}\n")
-              f.write(f"matika_version={matika_v}\n")
+              f.write(f"product_name={product_name}\n")
+              f.write(f"product_slug={product_slug}\n")
+              f.write(f"product_version={product_ver}\n")
               f.write(f"matika_repo={matika_repo}\n")
               f.write(f"matika_tag={matika_tag}\n")
-          print(f"App      : {name} v{version}")
-          print(f"Slug     : {slug}")
-          print(f"Matika   : {matika_v} ({matika_tag})")
+          print(f"Product  : {product_name} v{product_ver}")
+          print(f"Slug     : {product_slug}")
+          print(f"Matika   : {matika_tag}")
           print(f"Repo     : {matika_repo}")
           PYEOF
 
@@ -522,17 +559,26 @@ jobs:
           npm install
           npm run build
 
-      - name: Run PyInstaller (freeze Matika.exe)
+      - name: Run PyInstaller (freeze the product bundle)
         shell: bash
         working-directory: build/matika
+        env:
+          # Drive the frozen artifact's identity from the recipe's product
+          # fields so the bundle is <product_name>-<product_version> (e.g.
+          # ManoMatika-0.0.1), not the matika component name/version.
+          # matika.spec defaults to "Matika" + its own VERSION only for
+          # standalone dev builds where neither env var is set.
+          MATIKA_PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          MATIKA_PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
         run: |
-          # CORE/SUFFIX CONTRACT (cross-repo with manomatika/matika):
-          # matika.spec reads matika's own VERSION, strips any pre-release
-          # suffix (-dev / -rc.N) to BARE CORE, and emits the
-          # dist/Matika-<core>/ COLLECT tree containing Matika-<core>.exe. The
-          # bare core equals the recipe's matika.version pin (X.Y.Z), so the
-          # BUNDLE_DIR derived from MATIKA_VERSION below matches the spec's name
-          # even when building at an rc TAG (e.g. v0.0.4-rc.1).
+          # CORE/SUFFIX + PRODUCT-IDENTITY CONTRACT (cross-repo with
+          # manomatika/matika): matika.spec reads MATIKA_PRODUCT_NAME and
+          # MATIKA_PRODUCT_VERSION (set above from the recipe's product fields),
+          # strips any pre-release suffix (-dev / -rc.N) to BARE CORE, and emits
+          # the dist/<product_name>-<core>/ COLLECT tree containing
+          # <product_name>-<core>.exe (e.g. ManoMatika-0.0.1.exe). So the
+          # BUNDLE_DIR derived from PRODUCT_NAME + PRODUCT_VERSION below matches
+          # the spec's name even when building at an rc TAG (e.g. v0.0.4-rc.1).
           # Plugins cloned into plugins/ are bundled by launcher.py at first
           # run, not by the spec. Run from the cloned matika root so the spec's
           # SPEC-relative paths (src/, launcher.py, VERSION) resolve.
@@ -543,29 +589,28 @@ jobs:
       - name: Build Windows installer (Inno Setup)
         shell: cmd
         env:
-          APP_SLUG: ${{ steps.recipe_info.outputs.app_slug }}
-          APP_NAME: ${{ steps.recipe_info.outputs.app_name }}
-          APP_VERSION: ${{ steps.recipe_info.outputs.app_version }}
-          MATIKA_VERSION: ${{ steps.recipe_info.outputs.matika_version }}
+          PRODUCT_SLUG: ${{ steps.recipe_info.outputs.product_slug }}
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
         run: |
           @echo off
           REM Inno Setup is preinstalled on the windows-latest runner image (ISCC
           REM on PATH). It packages PyInstaller's one-dir output:
-          REM   build\matika\dist\Matika-<matika_version>\  (whole directory tree)
+          REM   build\matika\dist\<product_name>-<product_version>\  (whole tree)
           REM into a single installer EXE. All values are passed in as /D defines
-          REM so the .iss script carries no hardcoded version or path — AppVersion
-          REM and the source bundle are dynamic per the recipe.
-          set "BUNDLE_DIR=%CD%\build\matika\dist\Matika-%MATIKA_VERSION%"
-          set "OUTPUT_BASENAME=%APP_SLUG%-%APP_VERSION%-windows-x86_64"
+          REM so the .iss script carries no hardcoded name/version/path — the
+          REM installed identity (AppName, exe, shortcuts) is the PRODUCT name and
+          REM the source bundle is named after the product, per the recipe.
+          set "BUNDLE_DIR=%CD%\build\matika\dist\%PRODUCT_NAME%-%PRODUCT_VERSION%"
+          set "OUTPUT_BASENAME=%PRODUCT_SLUG%-%PRODUCT_VERSION%-windows-x86_64"
           if not exist "%BUNDLE_DIR%" (
             echo ::error::Expected PyInstaller bundle dir not found: %BUNDLE_DIR%
             dir build\matika\dist
             exit /b 1
           )
           ISCC ^
-            /DMyAppName="%APP_NAME%" ^
-            /DMyAppVersion="%APP_VERSION%" ^
-            /DMyMatikaVersion="%MATIKA_VERSION%" ^
+            /DMyAppName="%PRODUCT_NAME%" ^
+            /DMyAppVersion="%PRODUCT_VERSION%" ^
             /DMyBundleDir="%BUNDLE_DIR%" ^
             /DMyOutputDir="%CD%" ^
             /DMyOutputBaseName="%OUTPUT_BASENAME%" ^
@@ -576,8 +621,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe
-          path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-windows-x86_64.exe
+          name: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-windows-x86_64.exe
+          path: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-windows-x86_64.exe
 
   # ---------------------------------------------------------------------------
   # REFRESH RELEASES.MD — workflow_dispatch only

@@ -322,3 +322,90 @@ def test_refresh_releases_md_has_pr_write_permission(workflow):
     perms = job.get("permissions", {})
     assert perms.get("contents") == "write"
     assert perms.get("pull-requests") == "write"
+
+
+# ---------------------------------------------------------------------------
+# Product-identity naming — user-facing artifacts and the installed bundle/exe
+# are named after the PRODUCT (application.product_name + application.version),
+# NOT after the matika component or matika's framework version.
+# ---------------------------------------------------------------------------
+
+
+def _pyinstaller_step(workflow: dict, job_name: str) -> dict:
+    for step in workflow["jobs"][job_name]["steps"]:
+        if "pyinstaller matika.spec" in step.get("run", ""):
+            return step
+    raise AssertionError(f"{job_name} has no pyinstaller step")
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_recipe_info_reads_product_name(workflow, job_name):
+    """recipe_info derives the artifact identity from application.product_name
+    (the product brand), the lowercased+slugified filename slug, and the PRODUCT
+    version — never the matika component name/version."""
+    runs = _job_run_blocks(workflow["jobs"][job_name])
+    assert 'r["application"]' in runs
+    assert 'app["product_name"]' in runs
+    assert "product_slug=" in runs
+    assert "product_version=" in runs
+    # The matika component version must NOT name any user-facing artifact.
+    assert 'r["matika"]["version"]' not in runs
+    assert "matika_version=" not in runs
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_pyinstaller_step_passes_product_identity_env(workflow, job_name):
+    """The spec is told the product identity via env so the frozen bundle is
+    <product_name>-<product_version>, not Matika-<matika_version>."""
+    step = _pyinstaller_step(workflow, job_name)
+    env = step.get("env", {})
+    assert env.get("MATIKA_PRODUCT_NAME") == "${{ steps.recipe_info.outputs.product_name }}"
+    assert env.get("MATIKA_PRODUCT_VERSION") == "${{ steps.recipe_info.outputs.product_version }}"
+
+
+@pytest.mark.parametrize("job_name", MACOS_BUILD_JOBS)
+def test_dmg_named_after_product(workflow, job_name):
+    """The DMG filename and the .app it wraps are product-named; the volume name
+    is the product identity, not the descriptive application.name."""
+    step = _dmg_build_step(workflow, job_name)
+    run = step["run"]
+    assert 'APP_BUNDLE="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}.app"' in run
+    assert 'DMG_NAME="${PRODUCT_SLUG}-${PRODUCT_VERSION}-macos-${DMG_ARCH}.dmg"' in run
+    assert '--volname "${PRODUCT_NAME} ${PRODUCT_VERSION}"' in run
+    # The matika component version must not appear anywhere in the DMG step.
+    assert "MATIKA_VERSION" not in run
+
+
+def test_windows_installer_named_after_product(workflow):
+    """The Windows installer's AppName/bundle/output basename are product-driven."""
+    job = workflow["jobs"]["build-windows"]
+    runs = _job_run_blocks(job)
+    assert '/DMyAppName="%PRODUCT_NAME%"' in runs
+    assert '/DMyAppVersion="%PRODUCT_VERSION%"' in runs
+    assert 'set "BUNDLE_DIR=%CD%\\build\\matika\\dist\\%PRODUCT_NAME%-%PRODUCT_VERSION%"' in runs
+    assert 'set "OUTPUT_BASENAME=%PRODUCT_SLUG%-%PRODUCT_VERSION%-windows-x86_64"' in runs
+    # The removed matika-version define must not return.
+    assert "/DMyMatikaVersion" not in runs
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_upload_artifact_named_after_product(workflow, job_name):
+    """Uploaded artifact names use the product slug + product version."""
+    job = workflow["jobs"][job_name]
+    upload = next(
+        s for s in job["steps"]
+        if "upload-artifact" in str(s.get("uses", ""))
+    )
+    name = upload["with"]["name"]
+    assert name.startswith(
+        "${{ steps.recipe_info.outputs.product_slug }}-"
+        "${{ steps.recipe_info.outputs.product_version }}-"
+    )
+
+
+def test_iss_exe_name_derived_from_product_appname(workflow):
+    """The .iss derives the exe from MyAppName + MyAppVersion (the product
+    identity) and no longer carries a separate matika-version define."""
+    text = ISS_FILE.read_text()
+    assert '#define MyAppExeName MyAppName + "-" + MyAppVersion + ".exe"' in text
+    assert "MyMatikaVersion" not in text

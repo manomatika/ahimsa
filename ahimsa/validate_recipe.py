@@ -286,10 +286,31 @@ def resolver_for(repo: str, *, allowed_hosts: list[str]) -> BaseResolver:
 _VERSION_RE = re.compile(r'^\d+\.\d+\.\d+$')
 _BUNDLE_ID_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9-]*(\.[a-zA-Z][a-zA-Z0-9-]*){2,}$')
 
+# product_name is the canonical PRODUCT identity used to name user-facing
+# artifacts and the installed bundle/exe (e.g. "ManoMatika" ->
+# manomatika-0.0.1-macos-arm64.dmg and ManoMatika-0.0.1.app). It must therefore
+# survive two transforms unambiguously: lower-casing + slugifying for the
+# artifact FILENAME, and verbatim use for the proper-noun app/bundle identity.
+# Allowed charset: ASCII letters and digits, with single interior spaces or
+# hyphens as separators; it must start and end with an alphanumeric. This bans
+# leading/trailing/space-padding, underscores, slashes, dots, and any character
+# that would corrupt a bundle name or a filename slug.
+_PRODUCT_NAME_RE = re.compile(r'^[A-Za-z0-9]([A-Za-z0-9]| [A-Za-z0-9]|-[A-Za-z0-9])*$')
+
 
 def _check_version(errors: list[Error], value: str, pointer: str) -> None:
     if not _VERSION_RE.match(value):
         errors.append(Error(pointer, f'"{value}" is not a valid version — must be exact X.Y.Z'))
+
+
+def _check_product_name(errors: list[Error], value: str, pointer: str) -> None:
+    if not _PRODUCT_NAME_RE.match(value):
+        errors.append(Error(
+            pointer,
+            f'"{value}" is not a valid product name — must be ASCII '
+            f'alphanumerics separated by single spaces or hyphens, starting '
+            f'and ending with an alphanumeric (e.g. "ManoMatika")',
+        ))
 
 
 def _check_bundle_id(errors: list[Error], value: str, pointer: str) -> None:
@@ -337,9 +358,12 @@ def validate(
     # --- Schema: application ---
     app = recipe.get("application") or {}
 
-    for field in ("name", "version", "bundle_id", "icon"):
+    for field in ("name", "product_name", "version", "bundle_id", "icon"):
         if not app.get(field):
             errors.append(Error(f"application.{field}", "required field missing"))
+
+    if app.get("product_name"):
+        _check_product_name(errors, app["product_name"], "application.product_name")
 
     if app.get("version"):
         _check_version(errors, app["version"], "application.version")

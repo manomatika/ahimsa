@@ -36,6 +36,7 @@ def write_recipe(tmp_path, data: dict) -> object:
 VALID_RECIPE: dict = {
     "application": {
         "name": "Test App",
+        "product_name": "TestProduct",
         "version": "1.0.0",
         "bundle_id": "com.example.test",
         "icon": "assets/icon.icns",
@@ -170,6 +171,7 @@ def test_prerelease_tag_passes_with_bare_core_pins(tmp_path):
 
 @pytest.mark.parametrize("field,pointer", [
     ("name", "application.name"),
+    ("product_name", "application.product_name"),
     ("version", "application.version"),
     ("bundle_id", "application.bundle_id"),
     ("icon", "application.icon"),
@@ -180,6 +182,47 @@ def test_missing_application_field(tmp_path, field, pointer):
     assert pointer in pointers(errors)
     err = next(e for e in errors if e.pointer == pointer)
     assert "required field missing" in err.message
+
+
+# ---------------------------------------------------------------------------
+# product_name format: the canonical product identity that names user-facing
+# artifacts (manomatika-0.0.1-macos-arm64.dmg) and the installed bundle/exe
+# (ManoMatika-0.0.1.app). It must slug cleanly for a filename AND read as a
+# proper-noun bundle name, so the charset is constrained.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("good_name", [
+    "ManoMatika",
+    "Matika",
+    "Mano Matika",
+    "mano-matika",
+    "Product2",
+    "A",
+])
+def test_valid_product_name_passes(tmp_path, good_name):
+    recipe = {**VALID_RECIPE, "application": {**VALID_RECIPE["application"], "product_name": good_name}}
+    errors = _validate(recipe, tmp_path)
+    assert "application.product_name" not in pointers(errors)
+
+
+@pytest.mark.parametrize("bad_name", [
+    "Mano_Matika",      # underscore not allowed
+    "Mano/Matika",      # slash not allowed
+    "Mano.Matika",      # dot not allowed
+    " ManoMatika",      # leading space
+    "ManoMatika ",      # trailing space
+    "-ManoMatika",      # leading hyphen
+    "ManoMatika-",      # trailing hyphen
+    "Mano  Matika",     # double space
+    "Maño",             # non-ASCII
+    "Mano@Matika",      # symbol
+])
+def test_invalid_product_name(tmp_path, bad_name):
+    recipe = {**VALID_RECIPE, "application": {**VALID_RECIPE["application"], "product_name": bad_name}}
+    errors = _validate(recipe, tmp_path)
+    assert "application.product_name" in pointers(errors)
+    err = next(e for e in errors if e.pointer == "application.product_name")
+    assert "valid product name" in err.message
 
 
 # ---------------------------------------------------------------------------

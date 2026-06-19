@@ -3,7 +3,7 @@
 # dmgbuild evaluates this file as Python with the `defines` dict injected into
 # the module namespace. make_dmg.py passes:
 #   app_path  — absolute path to the .app bundle to include
-#   app_name  — the bundle's basename (e.g. "Matika-0.0.4.app")
+#   app_name  — the bundle's basename (e.g. "ManoMatika-0.0.1.app")
 #
 # Layout: the .app on the left, an /Applications symlink on the right, so the
 # user drags the app onto Applications to install — the standard macOS idiom.

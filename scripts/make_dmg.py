@@ -32,7 +32,7 @@ def build_dmg(app_path: str, volname: str, output: str) -> None:
         print(f"[make_dmg] error: app bundle not found: {app}", file=sys.stderr)
         sys.exit(1)
 
-    app_name = app.name  # e.g. "Matika-0.0.4.app"
+    app_name = app.name  # e.g. "ManoMatika-0.0.1.app"
 
     # dmgbuild reads its layout from a settings module namespace. We build that
     # namespace as a dict and hand it to dmgbuild.build_dmg(..., defines=...)
