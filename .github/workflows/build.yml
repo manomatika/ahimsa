@@ -225,10 +225,10 @@ jobs:
           path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg
 
   # ---------------------------------------------------------------------------
-  # BUILD — macOS Intel (macos-13)
+  # BUILD — macOS Intel (macos-15-intel)
   # ---------------------------------------------------------------------------
   build-macos-intel:
-    runs-on: macos-13
+    runs-on: macos-15-intel
     needs: validate
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
@@ -555,7 +555,7 @@ jobs:
           REM into a single installer EXE. All values are passed in as /D defines
           REM so the .iss script carries no hardcoded version or path — AppVersion
           REM and the source bundle are dynamic per the recipe.
-          set "BUNDLE_DIR=build\matika\dist\Matika-%MATIKA_VERSION%"
+          set "BUNDLE_DIR=%CD%\build\matika\dist\Matika-%MATIKA_VERSION%"
           set "OUTPUT_BASENAME=%APP_SLUG%-%APP_VERSION%-windows-x86_64"
           if not exist "%BUNDLE_DIR%" (
             echo ::error::Expected PyInstaller bundle dir not found: %BUNDLE_DIR%
@@ -567,7 +567,7 @@ jobs:
             /DMyAppVersion="%APP_VERSION%" ^
             /DMyMatikaVersion="%MATIKA_VERSION%" ^
             /DMyBundleDir="%BUNDLE_DIR%" ^
-            /DMyOutputDir="." ^
+            /DMyOutputDir="%CD%" ^
             /DMyOutputBaseName="%OUTPUT_BASENAME%" ^
             installer\windows_installer.iss
           if errorlevel 1 exit /b 1
