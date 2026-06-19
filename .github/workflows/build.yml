@@ -567,7 +567,7 @@ jobs:
             /DMyAppVersion="%APP_VERSION%" ^
             /DMyMatikaVersion="%MATIKA_VERSION%" ^
             /DMyBundleDir="%BUNDLE_DIR%" ^
-            /DMyOutputDir="." ^
+            /DMyOutputDir="%CD%" ^
             /DMyOutputBaseName="%OUTPUT_BASENAME%" ^
             installer\windows_installer.iss
           if errorlevel 1 exit /b 1
