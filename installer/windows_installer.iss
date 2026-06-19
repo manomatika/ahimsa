@@ -1,28 +1,31 @@
-; windows_installer.iss — Inno Setup script for Matika-based applications.
+; windows_installer.iss — Inno Setup script for ManoMatika-ecosystem products.
 ;
-; Packages PyInstaller's ONE-DIR output (the whole Matika-<matika_version>\
+; Packages PyInstaller's ONE-DIR output (the whole <product_name>-<version>\
 ; directory tree, not a single exe) into a Windows installer EXE.
 ;
-; CORE/SUFFIX CONTRACT: <matika_version> here is always BARE CORE (X.Y.Z).
-; It is supplied by build.yml from recipe.matika.version (validator-enforced
-; bare core) and equals the bare core matika.spec emits after stripping any
-; pre-release suffix (-dev / -rc.N). So the bundle dir / exe this script
-; references (Matika-<bare-core>\ and Matika-<bare-core>.exe) match the spec's
-; output even when the build runs at a pre-release TAG. Never embed a suffix
-; into the bundle name, the exe name, or AppVersion.
+; PRODUCT IDENTITY: the installed app name, exe name, shortcuts, and install
+; directory are all the PRODUCT identity (e.g. ManoMatika), NOT the matika
+; component. build.yml passes the recipe's product_name as MyAppName and the
+; product version (application.version) as MyAppVersion.
+;
+; CORE/SUFFIX CONTRACT: MyAppVersion here is always BARE CORE (X.Y.Z) — the
+; product version with any pre-release suffix (-dev / -rc.N) stripped, matching
+; the bare core matika.spec emits. So the bundle dir / exe this script
+; references (<product_name>-<bare-core>\ and <product_name>-<bare-core>.exe)
+; match the spec's output even when the build runs at a pre-release TAG. Never
+; embed a suffix into the bundle name, the exe name, or AppVersion.
 ;
 ; All variable inputs are supplied by build.yml via ISCC /D defines so this
-; script carries NO hardcoded version or path — the recipe (via build.yml's
+; script carries NO hardcoded name/version/path — the recipe (via build.yml's
 ; recipe_info outputs) is the single source of truth:
 ;
-;   /DMyAppName="<application.name>"
-;   /DMyAppVersion="<application.version>"      -> AppVersion (dynamic)
-;   /DMyMatikaVersion="<matika.version>"        -> names the bundle dir / exe
-;   /DMyBundleDir="build\matika\dist\Matika-<matika_version>"
+;   /DMyAppName="<application.product_name>"     -> installed identity (e.g. ManoMatika)
+;   /DMyAppVersion="<application.version>"       -> AppVersion + names the exe/dir
+;   /DMyBundleDir="build\matika\dist\<product_name>-<version>"
 ;   /DMyOutputDir="."
-;   /DMyOutputBaseName="<slug>-<app_version>-windows-x86_64"
+;   /DMyOutputBaseName="<product_slug>-<version>-windows-x86_64"
 ;
-; The bundle is one-dir: a folder containing Matika-<matika_version>.exe plus
+; The bundle is one-dir: a folder containing <product_name>-<version>.exe plus
 ; its _internal\ tree (Python runtime, static/, templates/, locales/, menus/,
 ; migrations/, and every other data file the matika.spec COLLECT step bundled).
 ; Cloned applug assets that PyInstaller picked up are inside that tree too, so
@@ -30,27 +33,24 @@
 
 ; ---- Fallback defaults (overridden by ISCC /D on the CI runner) -------------
 #ifndef MyAppName
-  #define MyAppName "Matika Application"
+  #define MyAppName "ManoMatika"
 #endif
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
-#ifndef MyMatikaVersion
-  #define MyMatikaVersion "0.0.0"
-#endif
 #ifndef MyBundleDir
-  #define MyBundleDir "build\matika\dist\Matika-" + MyMatikaVersion
+  #define MyBundleDir "build\matika\dist\" + MyAppName + "-" + MyAppVersion
 #endif
 #ifndef MyOutputDir
   #define MyOutputDir "."
 #endif
 #ifndef MyOutputBaseName
-  #define MyOutputBaseName "matika-windows-x86_64"
+  #define MyOutputBaseName "manomatika-windows-x86_64"
 #endif
 
 ; The executable inside the one-dir bundle, named by matika.spec as
-; Matika-<matika_version>.exe.
-#define MyAppExeName "Matika-" + MyMatikaVersion + ".exe"
+; <product_name>-<version>.exe — i.e. MyAppName-MyAppVersion.exe.
+#define MyAppExeName MyAppName + "-" + MyAppVersion + ".exe"
 
 [Setup]
 AppName={#MyAppName}
