@@ -128,9 +128,15 @@ def validate_releases(
             errors.append(Error("releases.repo", str(e)))
             return errors
 
-    # --- Fetch RELEASES.md from ahimsa at HEAD ---
+    # --- Fetch RELEASES.md from ahimsa at HEAD (or MANOMATIKA_REF if set) ---
+    # MANOMATIKA_REF is an optional env var that redirects the RELEASES.md and
+    # release-log.yaml fetches to a specific branch/SHA — used by cross-repo
+    # validation builds (ahimsa build.yml manomatika_ref input) so that a
+    # not-yet-merged manomatika branch can be validated end-to-end without
+    # requiring a push to main. Defaults to "HEAD" (repo default branch).
+    _mm_ref = os.environ.get("MANOMATIKA_REF") or "HEAD"
     try:
-        text = ahimsa_res.fetch_text(ahimsa_repo, "HEAD", "RELEASES.md")
+        text = ahimsa_res.fetch_text(ahimsa_repo, _mm_ref, "RELEASES.md")
     except Exception as e:
         errors.append(Error("releases.fetch", f"could not fetch RELEASES.md: {e}"))
         return errors
@@ -156,7 +162,7 @@ def validate_releases(
     deleted_pairs: set[tuple[str, str]] = set()
     pending_pairs: set[tuple[str, str]] = set()
     try:
-        rl_text = ahimsa_res.fetch_text(ahimsa_repo, "HEAD", "release-log.yaml")
+        rl_text = ahimsa_res.fetch_text(ahimsa_repo, _mm_ref, "release-log.yaml")
     except Exception:
         rl_text = None
 

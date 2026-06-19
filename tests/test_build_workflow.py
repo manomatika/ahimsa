@@ -437,6 +437,42 @@ def test_manomatika_ref_input_exists(workflow):
     )
 
 
+def test_refresh_releases_md_skips_on_cross_repo_validation(workflow):
+    """refresh-releases-md must not run when manomatika_ref is set.
+
+    A cross-repo validation build uses manomatika_ref to test recipe changes
+    on a branch before merging. In that context the refresh job would try to
+    update RELEASES.md on main from the WRONG ref, or fail because release-log
+    entries haven't been merged to main yet. Skipping it is the correct behavior.
+    """
+    job = workflow["jobs"]["refresh-releases-md"]
+    cond = job["if"]
+    # Must skip when manomatika_ref is provided (the cross-repo validation case).
+    assert "manomatika_ref" in cond, (
+        "refresh-releases-md must check inputs.manomatika_ref and skip "
+        "when it is set (cross-repo validation build)"
+    )
+    # Must still run on production workflow_dispatch (no manomatika_ref).
+    assert "workflow_dispatch" in cond
+
+
+def test_validate_step_passes_manomatika_ref(workflow):
+    """The validate step must pass MANOMATIKA_REF to ahimsa-validate so that
+    the RELEASES.md consistency check uses the same ref as the recipe fetch."""
+    validate_job = workflow["jobs"]["validate"]
+    validate_steps = [
+        s for s in validate_job["steps"]
+        if "ahimsa-validate" in s.get("run", "")
+    ]
+    assert validate_steps, "validate job must have an ahimsa-validate step"
+    step = validate_steps[0]
+    env = step.get("env", {})
+    assert "MANOMATIKA_REF" in env, (
+        "ahimsa-validate step must pass MANOMATIKA_REF env var so the "
+        "RELEASES.md fetch uses the same ref as the recipe fetch"
+    )
+
+
 def test_recipe_fetch_supports_optional_ref(workflow):
     """All jobs that fetch the recipe must support an optional ?ref= query param
     so the manomatika_ref input can be used for cross-repo validation."""

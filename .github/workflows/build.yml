@@ -54,6 +54,10 @@ jobs:
       - name: Validate recipe (fail fast)
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          # MANOMATIKA_REF redirects the RELEASES.md / release-log.yaml fetch
+          # inside ahimsa-validate to the same branch used for the recipe fetch.
+          # Only set when manomatika_ref is non-empty (cross-repo validation).
+          MANOMATIKA_REF: ${{ inputs.manomatika_ref }}
         run: ahimsa-validate "$RECIPE_PATH"
 
   # ---------------------------------------------------------------------------
@@ -697,7 +701,10 @@ jobs:
   # release-log.yaml, and opens a PR to mm (not to ahimsa).
   # ---------------------------------------------------------------------------
   refresh-releases-md:
-    if: github.event_name == 'workflow_dispatch'
+    # Skip when manomatika_ref is set — that indicates a cross-repo validation
+    # build (not a production dispatch), where RELEASES.md on main should not
+    # be auto-refreshed. Production dispatches leave manomatika_ref empty.
+    if: github.event_name == 'workflow_dispatch' && !inputs.manomatika_ref
     runs-on: ubuntu-latest
     permissions:
       contents: write
