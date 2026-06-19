@@ -409,3 +409,64 @@ def test_iss_exe_name_derived_from_product_appname(workflow):
     text = ISS_FILE.read_text()
     assert '#define MyAppExeName MyAppName + "-" + MyAppVersion + ".exe"' in text
     assert "MyMatikaVersion" not in text
+
+
+# ---------------------------------------------------------------------------
+# Cross-repo validation input (manomatika_ref) and PyInstaller assertion step
+# Regression guard for the v0.0.4-rc.2 / spec-missing-product-env incident.
+# ---------------------------------------------------------------------------
+
+
+def test_manomatika_ref_input_exists(workflow):
+    """The workflow must have an optional manomatika_ref dispatch input so that
+    recipe changes on a branch can be validated before merging to main.
+
+    This prevents the earlier mistake where verification was run against a
+    temporary branch pin (feat/product-name-identity) instead of the merged
+    main recipe, making the verification invalid.
+    """
+    # PyYAML maps the bare `on:` key to boolean True (Norway problem).
+    triggers = workflow.get(True, workflow.get("on"))
+    inputs = triggers.get("workflow_dispatch", {}).get("inputs", {})
+    assert "manomatika_ref" in inputs, (
+        "workflow_dispatch must have a manomatika_ref input for cross-repo "
+        "recipe validation before merging"
+    )
+    assert inputs["manomatika_ref"].get("required") is False, (
+        "manomatika_ref must be optional (default: use repo default branch)"
+    )
+
+
+def test_recipe_fetch_supports_optional_ref(workflow):
+    """All jobs that fetch the recipe must support an optional ?ref= query param
+    so the manomatika_ref input can be used for cross-repo validation."""
+    jobs_to_check = list(BUILD_JOBS) + ["validate"]
+    for job_name in jobs_to_check:
+        job = workflow["jobs"][job_name]
+        runs = _job_run_blocks(job)
+        assert "MANOMATIKA_REF" in runs, (
+            f"{job_name} recipe fetch must use MANOMATIKA_REF for optional ref support"
+        )
+        assert "REF_QUERY" in runs, (
+            f"{job_name} recipe fetch must build REF_QUERY from MANOMATIKA_REF"
+        )
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_pyinstaller_bundle_assertion_step_exists(workflow, job_name):
+    """Each build job must have an explicit assertion step that checks the
+    PyInstaller bundle dir is named after the PRODUCT (not the matika component)
+    BEFORE proceeding to the DMG/installer step.
+
+    Regression guard: without this step, a mis-named bundle (e.g. Matika-0.0.4
+    instead of ManoMatika-0.0.1) only surfaces as a confusing 'bundle not found'
+    error in the DMG/installer step, making the root cause hard to diagnose.
+    The assertion step catches it immediately after pyinstaller and emits a clear
+    error pointing to the matika.tag fix needed.
+    """
+    job = workflow["jobs"][job_name]
+    step_names = _step_names(job)
+    assert "Assert PyInstaller bundle matches product identity" in step_names, (
+        f"{job_name} must have an 'Assert PyInstaller bundle matches product "
+        f"identity' step between Run PyInstaller and the DMG/installer step"
+    )

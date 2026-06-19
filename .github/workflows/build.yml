@@ -7,6 +7,10 @@ on:
         description: "Path to recipe.json (e.g. recipes/reference-app/recipe.json)"
         required: false
         default: "recipes/reference-app/recipe.json"
+      manomatika_ref:
+        description: "Branch/tag/SHA in manomatika/manomatika to fetch the recipe from (default: repo default branch). Use for cross-repo validation of recipe changes before merging."
+        required: false
+        default: ""
 
 # ---------------------------------------------------------------------------
 # VALIDATE
@@ -35,8 +39,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           mkdir -p "$(dirname "$RECIPE_PATH")"
+          MANOMATIKA_REF="${{ inputs.manomatika_ref }}"
+          REF_QUERY="${MANOMATIKA_REF:+?ref=${MANOMATIKA_REF}}"
           gh api -H "Accept: application/vnd.github.raw+json" \
-            "repos/manomatika/manomatika/contents/$RECIPE_PATH" > "$RECIPE_PATH"
+            "repos/manomatika/manomatika/contents/${RECIPE_PATH}${REF_QUERY}" > "$RECIPE_PATH"
 
       - uses: actions/setup-python@v6
         with:
@@ -77,8 +83,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           mkdir -p "$(dirname "$RECIPE_PATH")"
+          MANOMATIKA_REF="${{ inputs.manomatika_ref }}"
+          REF_QUERY="${MANOMATIKA_REF:+?ref=${MANOMATIKA_REF}}"
           gh api -H "Accept: application/vnd.github.raw+json" \
-            "repos/manomatika/manomatika/contents/$RECIPE_PATH" > "$RECIPE_PATH"
+            "repos/manomatika/manomatika/contents/${RECIPE_PATH}${REF_QUERY}" > "$RECIPE_PATH"
 
       - uses: actions/setup-python@v6
         with:
@@ -204,6 +212,27 @@ jobs:
           pyinstaller matika.spec --noconfirm
           echo "PyInstaller output:"
           ls -la dist
+
+      - name: Assert PyInstaller bundle matches product identity
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+        run: |
+          # Regression guard: matika.spec must emit <product_name>-<product_version>
+          # (from MATIKA_PRODUCT_NAME/VERSION), not Matika-<framework_version>.
+          # Failure here means the cloned matika tag predates the product-identity
+          # spec changes (v0.0.4-rc.3+). Fix: pin a newer matika.tag in the recipe.
+          BUNDLE="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}"
+          if [ ! -d "$BUNDLE" ]; then
+            echo "::error::PyInstaller produced wrong bundle name."
+            echo "Expected dir : $BUNDLE"
+            echo "Found in build/matika/dist/:"
+            ls -la build/matika/dist/ || true
+            echo "Ensure recipe matika.tag >= v0.0.4-rc.3 (includes spec product-identity fix)."
+            exit 1
+          fi
+          echo "OK: ${PRODUCT_NAME}-${PRODUCT_VERSION} dir exists"
 
       - name: Build DMG (dmgbuild)
         shell: bash
@@ -267,8 +296,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           mkdir -p "$(dirname "$RECIPE_PATH")"
+          MANOMATIKA_REF="${{ inputs.manomatika_ref }}"
+          REF_QUERY="${MANOMATIKA_REF:+?ref=${MANOMATIKA_REF}}"
           gh api -H "Accept: application/vnd.github.raw+json" \
-            "repos/manomatika/manomatika/contents/$RECIPE_PATH" > "$RECIPE_PATH"
+            "repos/manomatika/manomatika/contents/${RECIPE_PATH}${REF_QUERY}" > "$RECIPE_PATH"
 
       - uses: actions/setup-python@v6
         with:
@@ -394,6 +425,23 @@ jobs:
           pyinstaller matika.spec --noconfirm
           echo "PyInstaller output:"
           ls -la dist
+
+      - name: Assert PyInstaller bundle matches product identity
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+        run: |
+          BUNDLE="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}"
+          if [ ! -d "$BUNDLE" ]; then
+            echo "::error::PyInstaller produced wrong bundle name."
+            echo "Expected dir : $BUNDLE"
+            echo "Found in build/matika/dist/:"
+            ls -la build/matika/dist/ || true
+            echo "Ensure recipe matika.tag >= v0.0.4-rc.3 (includes spec product-identity fix)."
+            exit 1
+          fi
+          echo "OK: ${PRODUCT_NAME}-${PRODUCT_VERSION} dir exists"
 
       - name: Build DMG (dmgbuild)
         shell: bash
@@ -458,8 +506,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           mkdir -p "$(dirname "$RECIPE_PATH")"
+          MANOMATIKA_REF="${{ inputs.manomatika_ref }}"
+          REF_QUERY="${MANOMATIKA_REF:+?ref=${MANOMATIKA_REF}}"
           gh api -H "Accept: application/vnd.github.raw+json" \
-            "repos/manomatika/manomatika/contents/$RECIPE_PATH" > "$RECIPE_PATH"
+            "repos/manomatika/manomatika/contents/${RECIPE_PATH}${REF_QUERY}" > "$RECIPE_PATH"
 
       - uses: actions/setup-python@v6
         with:
@@ -585,6 +635,23 @@ jobs:
           pyinstaller matika.spec --noconfirm
           echo "PyInstaller output:"
           ls -la dist
+
+      - name: Assert PyInstaller bundle matches product identity
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+        run: |
+          BUNDLE="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}"
+          if [ ! -d "$BUNDLE" ]; then
+            echo "::error::PyInstaller produced wrong bundle name."
+            echo "Expected dir : $BUNDLE"
+            echo "Found in build/matika/dist/:"
+            ls -la build/matika/dist/ || true
+            echo "Ensure recipe matika.tag >= v0.0.4-rc.3 (includes spec product-identity fix)."
+            exit 1
+          fi
+          echo "OK: ${PRODUCT_NAME}-${PRODUCT_VERSION} dir exists"
 
       - name: Build Windows installer (Inno Setup)
         shell: cmd
