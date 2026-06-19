@@ -225,10 +225,10 @@ jobs:
           path: ${{ steps.recipe_info.outputs.app_slug }}-${{ steps.recipe_info.outputs.app_version }}-macos-arm64.dmg
 
   # ---------------------------------------------------------------------------
-  # BUILD — macOS Intel (macos-13)
+  # BUILD — macOS Intel (macos-15-intel)
   # ---------------------------------------------------------------------------
   build-macos-intel:
-    runs-on: macos-13
+    runs-on: macos-15-intel
     needs: validate
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
