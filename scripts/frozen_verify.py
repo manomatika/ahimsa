@@ -194,32 +194,45 @@ def _require_requests():
 
 
 def _login(requests, base: str):
-    """Return an authenticated session, clearing the forced first-run change."""
+    """Return an authenticated session, password-agnostic.
+
+    The seeded admin starts with the default password and ``force_password_change``
+    set, so the first login rotates it to NEW_PASSWORD. Because tier (a) and tier
+    (b) share the same running server (and DB), a later login must accept EITHER
+    the default password (first login of the run) OR the already-rotated one
+    (any subsequent login). This avoids coupling the two tiers' order.
+    """
     s = requests.Session()
-    r = s.post(
-        f"{base}/login",
-        data={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
-        allow_redirects=False,
-        timeout=15,
-    )
-    if r.status_code not in (302, 303):
-        raise FrozenAppError(
-            f"login POST returned {r.status_code} (expected a redirect); "
-            f"body head: {r.text[:200]!r}"
-        )
-    location = r.headers.get("location", "")
-    if "/change-password" in location:
-        # First-run admin must set a new password before any route is usable.
-        cp = s.post(
-            f"{base}/change-password",
-            data={"new_password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD},
+
+    def attempt(pw):
+        return s.post(
+            f"{base}/login",
+            data={"email": ADMIN_EMAIL, "password": pw},
             allow_redirects=False,
             timeout=15,
         )
-        if cp.status_code not in (302, 303):
+
+    r = attempt(ADMIN_PASSWORD)
+    if r.status_code in (302, 303):
+        if "/change-password" in r.headers.get("location", ""):
+            cp = s.post(
+                f"{base}/change-password",
+                data={"new_password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD},
+                allow_redirects=False,
+                timeout=15,
+            )
+            if cp.status_code not in (302, 303):
+                raise FrozenAppError(
+                    f"change-password POST returned {cp.status_code} "
+                    f"(expected a redirect); body head: {cp.text[:200]!r}"
+                )
+    else:
+        # Default password rejected — it was already rotated earlier this run.
+        r2 = attempt(NEW_PASSWORD)
+        if r2.status_code not in (302, 303):
             raise FrozenAppError(
-                f"change-password POST returned {cp.status_code} "
-                f"(expected a redirect); body head: {cp.text[:200]!r}"
+                "login failed with BOTH the default and the rotated password "
+                f"(HTTP {r.status_code}/{r2.status_code}); body head: {r2.text[:200]!r}"
             )
     # Confirm we are actually authenticated now.
     home = s.get(f"{base}/", allow_redirects=False, timeout=15)

@@ -40,17 +40,34 @@ def _import_playwright():
     return sync_playwright
 
 
-def _login(page, base, admin_email, admin_password, new_password) -> None:
+def _submit_login(page, base, email, password) -> None:
     page.goto(f"{base}/login", wait_until="domcontentloaded")
-    page.fill('input[name="email"]', admin_email)
-    page.fill('input[name="password"]', admin_password)
-    with page.expect_navigation(wait_until="domcontentloaded"):
-        page.click('button[type="submit"], input[type="submit"]')
+    page.fill('input[name="email"]', email)
+    page.fill('input[name="password"]', password)
+    page.click('button[type="submit"], input[type="submit"]')
+    page.wait_for_load_state("domcontentloaded")
+
+
+def _login(page, base, admin_email, admin_password, new_password) -> None:
+    """Password-agnostic browser login.
+
+    Tier (a) runs first against the same server and rotates the admin password,
+    so the browser login must accept either the default (first login of the run)
+    or the already-rotated password. Mirrors frozen_verify._login.
+    """
+    _submit_login(page, base, admin_email, admin_password)
+    if page.url.rstrip("/").endswith("/login"):
+        # Default password rejected (already rotated) — use the new one.
+        _submit_login(page, base, admin_email, new_password)
     if "/change-password" in page.url:
         page.fill('input[name="new_password"]', new_password)
         page.fill('input[name="confirm_password"]', new_password)
-        with page.expect_navigation(wait_until="domcontentloaded"):
-            page.click('button[type="submit"], input[type="submit"]')
+        page.click('button[type="submit"], input[type="submit"]')
+        page.wait_for_load_state("domcontentloaded")
+    if page.url.rstrip("/").endswith("/login"):
+        raise BrowserCheckError(
+            "browser login failed with both the default and the rotated password"
+        )
 
 
 def _check_admin_form(page, base) -> None:
