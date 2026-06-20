@@ -92,8 +92,8 @@ see *Release-Notes System & Central Release Log* below.)
 ### Code and test discipline
 
 - **Regression tests are required for every fix.** A bug fix that doesn't include a test that would have caught the bug isn't done.
-- **All tests must pass — 0 failed, 0 skipped, 0 xfail.** No exceptions without explicit user approval. In multi-repo changes, every affected repo's full suite must pass before any PR is opened.
-- **Full-suite, every change, everywhere.** ANY code change — regardless of which repo it lives in — requires the COMPLETE unit-test suite of every affected repo (and any repo whose behavior could be impacted) to be run and pass: 0 failed / 0 skipped / 0 xfail. Run the entire suite, not a subset, before opening any PR.
+- **All tests must RUN IN FULL and pass — 100% clean.** Every affected repo's COMPLETE suite must RUN with nothing excluded, deselected, skipped, or marked integration-only, and pass: 0 failed / 0 skipped / 0 xfail / 0 deselected / 0 warnings. No test may be excluded or filtered and no warning suppressed without the product owner's explicit, per-case approval recorded as a documented rule variation.
+- **Full-suite, every change, everywhere — 100% clean (standing rule 21).** ANY code change, in ANY repo, requires the COMPLETE unit-test suite of every affected repo (and any repo whose behavior could be impacted) to RUN IN FULL — nothing excluded, deselected, skipped, or marked integration-only — and pass 100%: 0 failed / 0 skipped / 0 xfail / 0 deselected / 0 warnings. Eliminate every warning at its ROOT (fix the code or bump the dependency); never blanket-suppress with a `filterwarnings` / `-W ignore` / `-m 'not …'` filter. Use each repo's correct test environment (the uv-managed `.venv`) so a green run is never an env artifact. A change is not done until every suite is 100% clean.
 - **Never weaken or disable security / correctness checks** (CSRF, permission, auth, validation) as a workaround. If a check is producing a wrong answer, fix the call site to satisfy it correctly — never bypass.
 
 ### Repository ecosystem
@@ -177,7 +177,7 @@ tests/                    — pytest test suite
   test_packaging.py       — console-script entry-point contract (pyproject declarations, import resolution, installed-metadata path)
   test_config_precedence.py — walk-up and --config precedence matrix
   test_build_workflow.py  — build.yml workflow assertions
-  test_github_resolver_integration.py — real-network integration tier (opt-in)
+  test_github_resolver_integration.py — real-network integration tier (runs in the full suite)
   fixtures/               — per-scenario recipe + config fixtures
 scripts/
   build_standalone.py     — build orchestration (stubbed, not part of package)
@@ -296,13 +296,13 @@ When no token is set the resolver makes unauthenticated requests — public repo
 
 The token value is never logged and never appears in any error message — only its env-var name is referenced in the auth hint. The token leaves the resolver only via the outbound `Authorization` header.
 
-**Testing** — Two tiers, both run offline by default:
+**Testing** — Two tiers. Both run as part of the full suite — `pytest` exercises everything, nothing is deselected by default (standing rule 21):
 
-- **Unit tier** — `tests/test_validate_recipe.py`, `tests/test_validate_releases.py`. Tests inject `BaseResolver` subclasses via `validate(..., resolvers={"github.com": mock})` for protocol-contract checks, or patch `requests.get` directly to assert HTTP-layer details (headers, pagination, etc.). Mock resolvers must be genuine `BaseResolver` subclasses (not duck-typed) so interface changes are caught at test time.
+- **Unit tier** — `tests/test_validate_recipe.py`, `tests/test_validate_releases.py`. Tests inject `BaseResolver` subclasses via `validate(..., resolvers={"github.com": mock})` for protocol-contract checks, or patch `requests.get` directly to assert HTTP-layer details (headers, pagination, etc.). Mock resolvers must be genuine `BaseResolver` subclasses (not duck-typed) so interface changes are caught at test time. Runs offline.
 
-- **Integration tier** — `tests/test_github_resolver_integration.py`. Real `requests.get` calls against guaranteed-public GitHub repos (`octocat/Hello-World`). Catches transport-layer surprises that mocked tests cannot — e.g. the GitHub auth requirement that PR `manomatika/ahimsa#28` shipped without auth handling. Tests are marked `@pytest.mark.integration` and **excluded from the default `pytest tests/` run** via `addopts = "-m 'not integration'"` in `pyproject.toml`. Opt in with `pytest -m integration`.
+- **Integration tier** — `tests/test_github_resolver_integration.py`. Real `requests.get` calls against guaranteed-public GitHub repos (`octocat/Hello-World`). Catches transport-layer surprises that mocked tests cannot — e.g. the GitHub auth requirement that PR `manomatika/ahimsa#28` shipped without auth handling. Tests are marked `@pytest.mark.integration`. The tier **runs as part of the default `pytest tests/` run** — it is no longer deselected (the former `addopts = "-m 'not integration'"` default-exclusion was removed so the full suite always exercises it). The `integration` marker stays registered in `pyproject.toml` so `@pytest.mark.integration` is a known mark and the tier can still be selected (`pytest -m integration`) or skipped for offline work (`pytest -m 'not integration'`) on demand.
 
-  The integration tier runs unauthenticated by design — every test repo it touches must be public. This guarantees the tier works in any developer environment without setup. If `GITHUB_TOKEN` happens to be set, the resolver attaches `Authorization` automatically; against public repos this is a no-op. The tests do not assume token presence or absence.
+  The tier needs outbound network to `api.github.com` and `raw.githubusercontent.com`. It runs unauthenticated by design — every test repo it touches is public, so it works in any developer environment without setup. CI (`validate.yml`) passes the auto-provisioned `GITHUB_TOKEN` to the step purely for rate-limit headroom on shared runners; the resolver reads `GITHUB_TOKEN` → `GH_TOKEN` and attaches `Authorization` when present (a no-op against public repos). The tests do not assume token presence or absence.
 
 ## Release-Notes System & Central Release Log
 

@@ -22,7 +22,14 @@ jobs:
       - name: Install ahimsa and test dependencies
         run: pip install -e ".[test]"
 
-      - name: Run unit and invocation tests
+      # Runs the COMPLETE suite — unit, invocation, AND the real-network
+      # integration tier (no deselection). GITHUB_TOKEN is the auto-provisioned
+      # workflow token; the resolver reads it (GITHUB_TOKEN → GH_TOKEN) to lift
+      # the integration tier's GitHub rate limit on shared CI runners. The tier
+      # only touches public repos, so the token is for headroom, not access.
+      - name: Run full test suite (unit + invocation + integration)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pytest tests/
 
       # TODO(manomatika/ahimsa#60): re-enable after manomatika/matika and
