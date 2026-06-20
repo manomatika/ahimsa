@@ -504,7 +504,7 @@ def validate(
     # imports BaseResolver/Error/resolver_for from this module.
     from ahimsa.validate_releases import validate_releases as _validate_releases
 
-    _releases_allowed = None if resolvers is None else allowed_hosts
+    _releases_allowed = allowed_hosts
 
     if matika.get("repo"):
         for e in _validate_releases(

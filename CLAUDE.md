@@ -93,6 +93,7 @@ see *Release-Notes System & Central Release Log* below.)
 
 - **Regression tests are required for every fix.** A bug fix that doesn't include a test that would have caught the bug isn't done.
 - **All tests must pass — 0 failed, 0 skipped, 0 xfail.** No exceptions without explicit user approval. In multi-repo changes, every affected repo's full suite must pass before any PR is opened.
+- **Full-suite, every change, everywhere.** ANY code change — regardless of which repo it lives in — requires the COMPLETE unit-test suite of every affected repo (and any repo whose behavior could be impacted) to be run and pass: 0 failed / 0 skipped / 0 xfail. Run the entire suite, not a subset, before opening any PR.
 - **Never weaken or disable security / correctness checks** (CSRF, permission, auth, validation) as a workaround. If a check is producing a wrong answer, fix the call site to satisfy it correctly — never bypass.
 
 ### Repository ecosystem

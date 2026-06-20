@@ -120,13 +120,15 @@ def validate_releases(
             errors.append(Error("releases.repo", f'no resolver for host "{ahimsa_host}"'))
             return errors
     else:
-        if allowed_hosts is None:
-            allowed_hosts = ["github.com"]
+        # RELEASES.md always lives on github.com — bypass recipe's allowed_hosts for this fetch
         try:
-            ahimsa_res = resolver_for(ahimsa_repo, allowed_hosts=allowed_hosts)
+            ahimsa_res = resolver_for(ahimsa_repo, allowed_hosts=["github.com"])
         except (PermissionError, LookupError) as e:
             errors.append(Error("releases.repo", str(e)))
             return errors
+        # Per-repo tag checks use the passed allowed_hosts (default to github.com if not specified)
+        if allowed_hosts is None:
+            allowed_hosts = ["github.com"]
 
     # --- Fetch RELEASES.md from ahimsa at HEAD (or MANOMATIKA_REF if set) ---
     # MANOMATIKA_REF is an optional env var that redirects the RELEASES.md and
