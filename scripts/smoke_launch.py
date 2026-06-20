@@ -109,7 +109,10 @@ def main() -> int:
     log_text = _read_logs(logs_dir)
 
     # --- Assertions on the real first-run path -----------------------------
-    migration_ok = "alembic upgrade head" in log_text
+    # Require the COMPLETION line, not just "Running alembic upgrade head" — a
+    # migration that starts and then crashes (e.g. env.py can't import a model)
+    # must NOT count as applied.
+    migration_ok = "alembic upgrade head complete" in log_text
     plugin_ok = (f"[PLUGIN:{args.expect_plugin}]" in log_text
                  and "Successfully loaded plugin" in log_text)
     uvicorn_log_ok = "Uvicorn running" in log_text  # informational only
