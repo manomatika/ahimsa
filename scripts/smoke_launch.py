@@ -109,10 +109,17 @@ def main() -> int:
     log_text = _read_logs(logs_dir)
 
     # --- Assertions on the real first-run path -----------------------------
-    # Require the COMPLETION line, not just "Running alembic upgrade head" — a
-    # migration that starts and then crashes (e.g. env.py can't import a model)
-    # must NOT count as applied.
-    migration_ok = "alembic upgrade head complete" in log_text
+    # First-run establishes the schema via create_all() and records it with
+    # `alembic stamp head` (the initial migration only ADDS indexes to an
+    # existing table, so `upgrade head` on a fresh DB fails). Require BOTH the
+    # schema-created line and the stamp-complete line so a half-finished init
+    # (e.g. a model import error) does NOT count as applied. Still accept a
+    # legacy "alembic upgrade head complete" line for forward/backward safety.
+    migration_ok = (
+        ("Database schema created" in log_text
+         and "alembic stamp head complete" in log_text)
+        or "alembic upgrade head complete" in log_text
+    )
     plugin_ok = (f"[PLUGIN:{args.expect_plugin}]" in log_text
                  and "Successfully loaded plugin" in log_text)
     uvicorn_log_ok = "Uvicorn running" in log_text  # informational only
@@ -153,7 +160,8 @@ def main() -> int:
     print("\n========== BOOT PROOF (matching log lines) ==========")
     for line in log_text.splitlines():
         if any(marker in line for marker in (
-            "First-run init", "SECRET_KEY generated", "alembic upgrade head",
+            "First-run init", "SECRET_KEY generated", "Database schema created",
+            "alembic stamp head", "alembic upgrade head",
             "Discovering plugins", "Successfully loaded plugin",
             "Loaded plugins:", "Uvicorn running",
         )):
