@@ -189,6 +189,21 @@ jobs:
           npm install
           npm run build
 
+      - name: Install Matika runtime dependencies (PyInstaller bundles only what is importable)
+        shell: bash
+        working-directory: build/matika
+        run: |
+          # ROOT CAUSE of the "No module named 'alembic'" boot failure: the
+          # frozen app shipped NONE of matika's runtime deps because they were
+          # never installed before PyInstaller froze the bundle. PyInstaller can
+          # only collect packages importable in THIS environment, so alembic /
+          # fastapi / uvicorn / sqlalchemy were silently omitted and the app
+          # died at the first third-party import. Install the cloned matika's
+          # pinned deps here, BEFORE the freeze. Use requirements.txt (NOT
+          # `pip install -e .`) to avoid the pyproject requires-python>=3.14 gate
+          # (CI runs Python 3.11).
+          pip install -r requirements.txt
+
       - name: Run PyInstaller (freeze the product bundle)
         shell: bash
         working-directory: build/matika
@@ -237,6 +252,24 @@ jobs:
             exit 1
           fi
           echo "OK: ${PRODUCT_NAME}-${PRODUCT_VERSION} dir exists"
+
+      - name: Smoke-launch the frozen app (boot, migrate, load applug, serve)
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+        run: |
+          # DURABLE GUARDRAIL (the systemic gap that let three broken builds
+          # reach the user): actually BOOT the frozen artifact and fail the
+          # build if it can't start. Launches the .app's inner Mach-O binary
+          # natively in a clean temp HOME so the real first-run path runs
+          # (SECRET_KEY, in-process alembic migrate, applug discovery/load,
+          # uvicorn bind). The script polls the server, asserts the migration
+          # ran and the eyerate applug loaded, dumps ~/matika/logs on failure,
+          # then terminates the app. A hung boot fails via the timeout.
+          APP="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}.app"
+          EXE="$APP/Contents/MacOS/${PRODUCT_NAME}-${PRODUCT_VERSION}"
+          python scripts/smoke_launch.py --exe "$EXE" --expect-plugin eyerate --timeout 90
 
       - name: Build DMG (dmgbuild)
         shell: bash
@@ -402,6 +435,21 @@ jobs:
           npm install
           npm run build
 
+      - name: Install Matika runtime dependencies (PyInstaller bundles only what is importable)
+        shell: bash
+        working-directory: build/matika
+        run: |
+          # ROOT CAUSE of the "No module named 'alembic'" boot failure: the
+          # frozen app shipped NONE of matika's runtime deps because they were
+          # never installed before PyInstaller froze the bundle. PyInstaller can
+          # only collect packages importable in THIS environment, so alembic /
+          # fastapi / uvicorn / sqlalchemy were silently omitted and the app
+          # died at the first third-party import. Install the cloned matika's
+          # pinned deps here, BEFORE the freeze. Use requirements.txt (NOT
+          # `pip install -e .`) to avoid the pyproject requires-python>=3.14 gate
+          # (CI runs Python 3.11).
+          pip install -r requirements.txt
+
       - name: Run PyInstaller (freeze the product bundle)
         shell: bash
         working-directory: build/matika
@@ -446,6 +494,24 @@ jobs:
             exit 1
           fi
           echo "OK: ${PRODUCT_NAME}-${PRODUCT_VERSION} dir exists"
+
+      - name: Smoke-launch the frozen app (boot, migrate, load applug, serve)
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+        run: |
+          # DURABLE GUARDRAIL (the systemic gap that let three broken builds
+          # reach the user): actually BOOT the frozen artifact and fail the
+          # build if it can't start. Launches the .app's inner Mach-O binary
+          # natively in a clean temp HOME so the real first-run path runs
+          # (SECRET_KEY, in-process alembic migrate, applug discovery/load,
+          # uvicorn bind). The script polls the server, asserts the migration
+          # ran and the eyerate applug loaded, dumps ~/matika/logs on failure,
+          # then terminates the app. A hung boot fails via the timeout.
+          APP="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}.app"
+          EXE="$APP/Contents/MacOS/${PRODUCT_NAME}-${PRODUCT_VERSION}"
+          python scripts/smoke_launch.py --exe "$EXE" --expect-plugin eyerate --timeout 90
 
       - name: Build DMG (dmgbuild)
         shell: bash
@@ -613,6 +679,21 @@ jobs:
           npm install
           npm run build
 
+      - name: Install Matika runtime dependencies (PyInstaller bundles only what is importable)
+        shell: bash
+        working-directory: build/matika
+        run: |
+          # ROOT CAUSE of the "No module named 'alembic'" boot failure: the
+          # frozen app shipped NONE of matika's runtime deps because they were
+          # never installed before PyInstaller froze the bundle. PyInstaller can
+          # only collect packages importable in THIS environment, so alembic /
+          # fastapi / uvicorn / sqlalchemy were silently omitted and the app
+          # died at the first third-party import. Install the cloned matika's
+          # pinned deps here, BEFORE the freeze. Use requirements.txt (NOT
+          # `pip install -e .`) to avoid the pyproject requires-python>=3.14 gate
+          # (CI runs Python 3.11).
+          pip install -r requirements.txt
+
       - name: Run PyInstaller (freeze the product bundle)
         shell: bash
         working-directory: build/matika
@@ -656,6 +737,20 @@ jobs:
             exit 1
           fi
           echo "OK: ${PRODUCT_NAME}-${PRODUCT_VERSION} dir exists"
+
+      - name: Smoke-launch the frozen app (boot, migrate, load applug, serve)
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+        run: |
+          # DURABLE GUARDRAIL: boot the frozen one-dir .exe in a clean
+          # USERPROFILE/HOME and fail the build if it can't start, run the
+          # first-run alembic migration, load the eyerate applug, and bind its
+          # server. The script dumps the app logs on failure; a hung boot fails
+          # via the timeout.
+          EXE="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}/${PRODUCT_NAME}-${PRODUCT_VERSION}.exe"
+          python scripts/smoke_launch.py --exe "$EXE" --expect-plugin eyerate --timeout 90
 
       - name: Build Windows installer (Inno Setup)
         shell: cmd
