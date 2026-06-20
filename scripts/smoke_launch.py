@@ -44,6 +44,16 @@ def _read_logs(logs_dir: str) -> str:
 
 
 def main() -> int:
+    # The frozen app's logs contain non-ASCII (e.g. "SECRET_KEY generated → …").
+    # Windows stdout defaults to cp1252, so printing those proof lines would
+    # raise UnicodeEncodeError and fail the step even on a fully green boot.
+    # Force UTF-8 with replacement so reporting never crashes the smoke.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--exe", required=True, help="frozen executable to launch")
     ap.add_argument("--expect-plugin", default="eyerate",
