@@ -29,11 +29,16 @@ ahimsa-validate-releases = "ahimsa.validate_releases:main"
 packages = ["ahimsa"]
 
 [tool.pytest.ini_options]
-# Integration tier exercises the real GitHub API (no auth required — uses
-# guaranteed-public test repos like octocat/Hello-World). Excluded from the
-# default test run because real-network calls are slower and can transiently
-# fail on network blips. Run explicitly with: pytest -m integration
+# The integration tier exercises the real GitHub API against guaranteed-public
+# test repos (octocat/Hello-World). It runs as part of the full suite — nothing
+# is deselected by default — so `pytest` (and CI's `pytest tests/`) exercises
+# every test. The tier needs outbound network to api.github.com and
+# raw.githubusercontent.com; it runs unauthenticated by design, but honours
+# GITHUB_TOKEN when set (CI passes the auto-provisioned token for rate-limit
+# headroom — see .github/workflows/validate.yml). The `integration` marker stays
+# registered so `@pytest.mark.integration` is a known mark (no unknown-mark
+# warning) and the tier can still be selected/deselected on demand
+# (`pytest -m integration` / `pytest -m 'not integration'`) for offline work.
 markers = [
-    "integration: real-network tests against public GitHub (deselect with '-m \"not integration\"')",
+    "integration: real-network tests against public GitHub (run by default; select with '-m integration', skip offline with '-m \"not integration\"')",
 ]
-addopts = "-m 'not integration'"
