@@ -21,6 +21,10 @@ from pathlib import Path
 
 import requests
 
+# Allow `python3 ahimsa/validate_recipe.py <recipe>` without pip installation.
+if __package__ is None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from ahimsa._config import find_config, load_allowed_hosts
 
 

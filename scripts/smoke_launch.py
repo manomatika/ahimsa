@@ -145,6 +145,12 @@ def main() -> int:
     plugin_ok = (f"[PLUGIN:{args.expect_plugin}]" in search_text
                  and "Successfully loaded plugin" in search_text)
     uvicorn_log_ok = "Uvicorn running" in search_text  # informational only
+    # Data-provider deps check: eyerate/plugin.py logs "Data provider deps OK"
+    # when yfinance+curl_cffi are importable, or logs an error when they're
+    # missing. This guard catches a missing bundling before users hit the
+    # lookup/search screen (where failures were silent 'return []' before).
+    data_deps_ok = "Data provider deps OK" in search_text
+    data_deps_error = "Data provider deps missing" in search_text
 
     # --- Shut the app down -------------------------------------------------
     try:
@@ -158,17 +164,21 @@ def main() -> int:
         pass
     out_fh.close()
 
-    ok = server_up and migration_ok and plugin_ok
+    ok = server_up and migration_ok and plugin_ok and data_deps_ok
 
     print("\n=== SMOKE RESULT ===")
     print(f"  server bound / responding   : {server_up}")
     print(f"  alembic migration applied   : {migration_ok}")
     print(f"  applug '{args.expect_plugin}' loaded : {plugin_ok}")
+    print(f"  data provider deps OK       : {data_deps_ok}")
+    if data_deps_error:
+        print("  ::warning:: data provider deps MISSING — symbol lookup will fail")
     print(f"  'Uvicorn running' log line  : {uvicorn_log_ok}")
 
     if not ok:
         print("::error::smoke-launch FAILED — the frozen app did not reach a "
-              "running, applug-loaded server. Logs + process output below.")
+              "running, applug-loaded server with all data-provider deps present. "
+              "Logs + process output below.")
         print("\n========== ~/matika/logs (frozen app) ==========")
         print(log_text if log_text else "(NO log files were written!)")
         try:
@@ -185,7 +195,7 @@ def main() -> int:
             "First-run init", "SECRET_KEY generated", "Database schema created",
             "alembic stamp head", "alembic upgrade head",
             "Discovering plugins", "Successfully loaded plugin",
-            "Loaded plugins:", "Uvicorn running",
+            "Loaded plugins:", "Data provider deps", "Uvicorn running",
         )):
             print("  " + line.strip())
     print("\nsmoke: PASS — frozen app booted, migrated, loaded "
