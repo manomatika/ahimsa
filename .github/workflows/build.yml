@@ -204,6 +204,19 @@ jobs:
           # (CI runs Python 3.11).
           pip install -r requirements.txt
 
+      - name: Install AppLug runtime dependencies
+        shell: bash
+        working-directory: build/matika
+        run: |
+          # Install each cloned AppLug's runtime requirements before PyInstaller
+          # so data-provider deps (e.g. yfinance, curl_cffi for eyerate) are
+          # importable and collected by collect_all() in matika.spec. Without
+          # this step, eyerate's symbol lookup/search silently returns empty
+          # in the frozen app because curl_cffi/yfinance are not bundled.
+          for req in plugins/*/requirements.txt; do
+            [ -f "$req" ] && pip install -r "$req"
+          done
+
       - name: Run PyInstaller (freeze the product bundle)
         shell: bash
         working-directory: build/matika
@@ -450,6 +463,19 @@ jobs:
           # (CI runs Python 3.11).
           pip install -r requirements.txt
 
+      - name: Install AppLug runtime dependencies
+        shell: bash
+        working-directory: build/matika
+        run: |
+          # Install each cloned AppLug's runtime requirements before PyInstaller
+          # so data-provider deps (e.g. yfinance, curl_cffi for eyerate) are
+          # importable and collected by collect_all() in matika.spec. Without
+          # this step, eyerate's symbol lookup/search silently returns empty
+          # in the frozen app because curl_cffi/yfinance are not bundled.
+          for req in plugins/*/requirements.txt; do
+            [ -f "$req" ] && pip install -r "$req"
+          done
+
       - name: Run PyInstaller (freeze the product bundle)
         shell: bash
         working-directory: build/matika
@@ -693,6 +719,19 @@ jobs:
           # `pip install -e .`) to avoid the pyproject requires-python>=3.14 gate
           # (CI runs Python 3.11).
           pip install -r requirements.txt
+
+      - name: Install AppLug runtime dependencies
+        shell: bash
+        working-directory: build/matika
+        run: |
+          # Install each cloned AppLug's runtime requirements before PyInstaller
+          # so data-provider deps (e.g. yfinance, curl_cffi for eyerate) are
+          # importable and collected by collect_all() in matika.spec. Without
+          # this step, eyerate's symbol lookup/search silently returns empty
+          # in the frozen app because curl_cffi/yfinance are not bundled.
+          for req in plugins/*/requirements.txt; do
+            [ -f "$req" ] && pip install -r "$req"
+          done
 
       - name: Run PyInstaller (freeze the product bundle)
         shell: bash
