@@ -488,6 +488,75 @@ def test_recipe_fetch_supports_optional_ref(workflow):
         )
 
 
+# ---------------------------------------------------------------------------
+# Feature verification against the FROZEN artifact (standing rule 22).
+# The boot smoke only proved the app STARTS. These steps prove EyeRate WORKS —
+# on BOTH the fresh and the upgrade-over-stale install paths — which is the gap
+# that let the "admin coming soon / lookup dead" regression reach the user.
+# ---------------------------------------------------------------------------
+
+
+def _feature_verify_step(workflow: dict, job_name: str) -> dict:
+    for step in workflow["jobs"][job_name]["steps"]:
+        if "frozen_verify.py" in step.get("run", ""):
+            return step
+    raise AssertionError(f"{job_name} has no frozen_verify.py feature-check step")
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_build_job_runs_feature_verification(workflow, job_name):
+    """Each build job must run frozen_verify.py — feature checks, not just boot."""
+    step = _feature_verify_step(workflow, job_name)
+    run = step["run"]
+    assert "scripts/frozen_verify.py" in run
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_feature_verification_covers_both_install_paths(workflow, job_name):
+    """Both the fresh AND the upgrade-over-stale scenarios must be exercised."""
+    run = _feature_verify_step(workflow, job_name)["run"]
+    assert "--scenario fresh" in run, (
+        f"{job_name} must run the fresh-install feature scenario"
+    )
+    assert "--scenario upgrade" in run, (
+        f"{job_name} must run the upgrade-over-stale feature scenario "
+        "(the path that shipped the regression)"
+    )
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_feature_verification_runs_browser_tier(workflow, job_name):
+    """Tier (b) headless-browser checks must run (the user chose a+b)."""
+    run = _feature_verify_step(workflow, job_name)["run"]
+    assert "--browser" in run, f"{job_name} must run tier (b) browser checks (--browser)"
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_build_job_installs_playwright_for_browser_tier(workflow, job_name):
+    """The browser tier needs Playwright + a browser installed in the job."""
+    runs = _job_run_blocks(workflow["jobs"][job_name])
+    assert "playwright" in runs, f"{job_name} must install playwright"
+    assert "playwright install" in runs, (
+        f"{job_name} must install the Playwright browser (chromium)"
+    )
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_feature_verification_runs_after_smoke(workflow, job_name):
+    """Feature verification must come AFTER the boot smoke (needs a built app)."""
+    names = _step_names(workflow["jobs"][job_name])
+    smoke_idx = next(i for i, n in enumerate(names) if "Smoke-launch" in n)
+    verify_idx = next(i for i, n in enumerate(names) if "Verify product FEATURES" in n)
+    assert verify_idx > smoke_idx, (
+        f"{job_name}: feature verification must run after the smoke-launch step"
+    )
+
+
+def test_feature_verify_scripts_exist():
+    assert (REPO_ROOT / "scripts" / "frozen_verify.py").is_file()
+    assert (REPO_ROOT / "scripts" / "browser_verify.py").is_file()
+
+
 @pytest.mark.parametrize("job_name", BUILD_JOBS)
 def test_pyinstaller_bundle_assertion_step_exists(workflow, job_name):
     """Each build job must have an explicit assertion step that checks the

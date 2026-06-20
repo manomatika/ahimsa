@@ -284,6 +284,34 @@ jobs:
           EXE="$APP/Contents/MacOS/${PRODUCT_NAME}-${PRODUCT_VERSION}"
           python scripts/smoke_launch.py --exe "$EXE" --expect-plugin eyerate --timeout 90
 
+      - name: Install verification dependencies (requests + Playwright Chromium)
+        shell: bash
+        run: |
+          python -m pip install --upgrade requests playwright
+          python -m playwright install chromium
+
+      - name: Verify product FEATURES — fresh + upgrade-over-stale (tier a HTTP + tier b browser)
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+        run: |
+          # Closes the systemic gap (standing rule 22): the boot smoke proved only
+          # that the app STARTS. These checks prove EyeRate WORKS against the FROZEN
+          # artifact — admin provider form present + "coming soon" absent, VOO lookup
+          # returns real results, and a forced provider failure surfaces a VISIBLE
+          # error (Task-4) — on BOTH install paths, including the upgrade-over-stale
+          # path that shipped the "coming soon / lookup dead" regression. The upgrade
+          # scenario boots once, mutates ~/matika/plugins/eyerate into the user's
+          # exact stale state (old template, older version, no marker, + user data),
+          # reboots, and asserts the launcher REFRESHED the code while PRESERVING the
+          # user data. Tier (a) is authenticated HTTP; tier (b) drives a headless
+          # Chromium through the lookup-dialog DOM.
+          APP="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}.app"
+          EXE="$APP/Contents/MacOS/${PRODUCT_NAME}-${PRODUCT_VERSION}"
+          python scripts/frozen_verify.py --exe "$EXE" --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "$EXE" --scenario upgrade --browser --timeout 120
+
       - name: Build DMG (dmgbuild)
         shell: bash
         env:
@@ -539,6 +567,34 @@ jobs:
           EXE="$APP/Contents/MacOS/${PRODUCT_NAME}-${PRODUCT_VERSION}"
           python scripts/smoke_launch.py --exe "$EXE" --expect-plugin eyerate --timeout 90
 
+      - name: Install verification dependencies (requests + Playwright Chromium)
+        shell: bash
+        run: |
+          python -m pip install --upgrade requests playwright
+          python -m playwright install chromium
+
+      - name: Verify product FEATURES — fresh + upgrade-over-stale (tier a HTTP + tier b browser)
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+        run: |
+          # Closes the systemic gap (standing rule 22): the boot smoke proved only
+          # that the app STARTS. These checks prove EyeRate WORKS against the FROZEN
+          # artifact — admin provider form present + "coming soon" absent, VOO lookup
+          # returns real results, and a forced provider failure surfaces a VISIBLE
+          # error (Task-4) — on BOTH install paths, including the upgrade-over-stale
+          # path that shipped the "coming soon / lookup dead" regression. The upgrade
+          # scenario boots once, mutates ~/matika/plugins/eyerate into the user's
+          # exact stale state (old template, older version, no marker, + user data),
+          # reboots, and asserts the launcher REFRESHED the code while PRESERVING the
+          # user data. Tier (a) is authenticated HTTP; tier (b) drives a headless
+          # Chromium through the lookup-dialog DOM.
+          APP="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}.app"
+          EXE="$APP/Contents/MacOS/${PRODUCT_NAME}-${PRODUCT_VERSION}"
+          python scripts/frozen_verify.py --exe "$EXE" --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "$EXE" --scenario upgrade --browser --timeout 120
+
       - name: Build DMG (dmgbuild)
         shell: bash
         env:
@@ -790,6 +846,28 @@ jobs:
           # via the timeout.
           EXE="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}/${PRODUCT_NAME}-${PRODUCT_VERSION}.exe"
           python scripts/smoke_launch.py --exe "$EXE" --expect-plugin eyerate --timeout 90
+
+      - name: Install verification dependencies (requests + Playwright Chromium)
+        shell: bash
+        run: |
+          python -m pip install --upgrade requests playwright
+          python -m playwright install chromium
+
+      - name: Verify product FEATURES — fresh + upgrade-over-stale (tier a HTTP + tier b browser)
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+        run: |
+          # Same feature-level proof as the macOS jobs (standing rule 22): prove
+          # EyeRate WORKS against the frozen .exe on BOTH the fresh and the
+          # upgrade-over-stale install paths — admin provider form present, VOO
+          # lookup returns real results, forced provider failure surfaces a visible
+          # error, stale plugin refreshed + user data preserved. Tier (a) HTTP +
+          # tier (b) headless Chromium.
+          EXE="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}/${PRODUCT_NAME}-${PRODUCT_VERSION}.exe"
+          python scripts/frozen_verify.py --exe "$EXE" --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "$EXE" --scenario upgrade --browser --timeout 120
 
       - name: Build Windows installer (Inno Setup)
         shell: cmd
