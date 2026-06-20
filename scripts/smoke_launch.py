@@ -108,6 +108,18 @@ def main() -> int:
     logs_dir = os.path.join(temp_home, "matika", "logs")
     log_text = _read_logs(logs_dir)
 
+    # Also fold in the process stdout/stderr. Some boot lines only reach the
+    # console handler (e.g. uvicorn's "Uvicorn running", or any line emitted
+    # while a library momentarily owns the root logger), so search both the
+    # on-disk logs AND the captured process output for the boot markers.
+    proc_output = ""
+    try:
+        with open(out_path, encoding="utf-8", errors="replace") as fh:
+            proc_output = fh.read()
+    except OSError:
+        pass
+    search_text = log_text + "\n" + proc_output
+
     # --- Assertions on the real first-run path -----------------------------
     # First-run establishes the schema via create_all() and records it with
     # `alembic stamp head` (the initial migration only ADDS indexes to an
@@ -116,13 +128,13 @@ def main() -> int:
     # (e.g. a model import error) does NOT count as applied. Still accept a
     # legacy "alembic upgrade head complete" line for forward/backward safety.
     migration_ok = (
-        ("Database schema created" in log_text
-         and "alembic stamp head complete" in log_text)
-        or "alembic upgrade head complete" in log_text
+        ("Database schema created" in search_text
+         and "alembic stamp head complete" in search_text)
+        or "alembic upgrade head complete" in search_text
     )
-    plugin_ok = (f"[PLUGIN:{args.expect_plugin}]" in log_text
-                 and "Successfully loaded plugin" in log_text)
-    uvicorn_log_ok = "Uvicorn running" in log_text  # informational only
+    plugin_ok = (f"[PLUGIN:{args.expect_plugin}]" in search_text
+                 and "Successfully loaded plugin" in search_text)
+    uvicorn_log_ok = "Uvicorn running" in search_text  # informational only
 
     # --- Shut the app down -------------------------------------------------
     try:
@@ -158,7 +170,7 @@ def main() -> int:
         return 1
 
     print("\n========== BOOT PROOF (matching log lines) ==========")
-    for line in log_text.splitlines():
+    for line in search_text.splitlines():
         if any(marker in line for marker in (
             "First-run init", "SECRET_KEY generated", "Database schema created",
             "alembic stamp head", "alembic upgrade head",
