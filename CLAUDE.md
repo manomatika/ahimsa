@@ -99,11 +99,11 @@ see *Release-Notes System & Central Release Log* below.)
 
 ### Repository ecosystem
 
-- **manomatika** is the GitHub org. Four repos compose the ecosystem:
-  - **manomatika/manomatika** — PRODUCT AUTHORITY: recipes, audit log, product release, umbrella docs, QA gate
-  - **manomatika/matika** — the framework (plugin-agnostic FastAPI host)
-  - **manomatika/eyerate** — the reference AppLug (financial security tracking)
-  - **manomatika/ahimsa** — recipe engine: build / validation / release mechanism (this repo)
+- **manomatika** is the GitHub org. The shipped PRODUCT is **ManoMatika** — a pinned *triple* of component versions (matika + eyerate + ahimsa), blessed by a single product release. The repos:
+  - **manomatika/manomatika** — PRODUCT AUTHORITY. Owns the recipes, the audit log (`release-log.yaml` + `RELEASES.md`), the product release + single hosted installer binary, cross-component umbrella docs, the per-version manifest/BOM (pins each component by tag AND resolved SHA), and the QA gate.
+  - **manomatika/matika** — the framework (plugin-agnostic FastAPI host). Component; notes-only releases.
+  - **manomatika/eyerate** — the reference AppLug (financial security tracking). Component; notes-only releases.
+  - **manomatika/ahimsa** — the recipe ENGINE: build / validation / release *mechanism* + recipe *schema*. Owns no recipes, no audit-log content, and hosts no product releases of its own. **This repo.**
 - Local clones live at `~/dev/projects/<repo>/` (sibling directories). Additional worktrees for the same repo live at `~/dev/projects/<repo>-<branch>/`.
 
 ### Milestones, Project, and dates
