@@ -149,13 +149,16 @@ recipe pin fields are bare core (regex `^\d+\.\d+\.\d+$`) and passes `tag`
 fields through to resolvers as opaque git refs.
 
 The reference-app recipe lives in `manomatika/manomatika` at
-`recipes/reference-app/recipe.json`, with version pins (bare core) `0.0.4` for
-matika and for the eyerate applug, and git-ref `tag` fields set to `v0.0.4-rc.1`
-for both — from `github.com/manomatika/matika` and `github.com/manomatika/eyerate`.
-This is the canonical example of the CORE/SUFFIX contract in action: version pins
-stay bare core; tags MAY carry a pre-release suffix. `build.yml`'s
-`workflow_dispatch` fetches it from mm at the path given by the `recipe_path`
-input (default `recipes/reference-app/recipe.json`).
+`recipes/reference-app/recipe.json`. It pins matika and the eyerate applug to a
+**bare-core** `version` (`0.0.4` today) while its git-ref `tag` fields carry the
+currently-blessed **pre-release tag** (e.g. `v0.0.4-rc.N` for matika, a possibly
+different rc for eyerate) from `github.com/manomatika/matika` and
+`github.com/manomatika/eyerate`. Those tag values are transient and owned by mm —
+they get re-pinned each rc, so do not treat any specific rc here as canonical.
+The invariant that IS canonical: version pins stay bare core; `tag` fields MAY
+carry a pre-release suffix, and the two are decoupled. `build.yml`'s
+`workflow_dispatch` fetches the recipe from mm at the path given by the
+`recipe_path` input (default `recipes/reference-app/recipe.json`).
 
 ## Package Layout
 
@@ -178,12 +181,19 @@ tests/                    — pytest test suite
   test_packaging.py       — console-script entry-point contract (pyproject declarations, import resolution, installed-metadata path)
   test_config_precedence.py — walk-up and --config precedence matrix
   test_build_workflow.py  — build.yml workflow assertions
+  test_frozen_verify.py   — unit tests for the frozen-feature verification harness
   test_github_resolver_integration.py — real-network integration tier (runs in the full suite)
   fixtures/               — per-scenario recipe + config fixtures
 scripts/
   build_standalone.py     — build orchestration (stubbed, not part of package)
   make_dmg.py / _dmg_settings.py — DMG wrapper invoked by build.yml (macOS)
+  smoke_launch.py         — boots the frozen app and asserts it serves (build.yml smoke gate)
+  frozen_verify.py        — tier-a authenticated-HTTP feature checks against the frozen artifact (fresh + upgrade scenarios)
+  browser_verify.py       — tier-b headless-Playwright feature checks (driven via frozen_verify --browser)
   render_releases_md.py   — RELEASES.md render entry point (used by build.yml refresh job)
+installer/                — windows_installer.iss (Inno Setup script for the Windows EXE)
+docs/                     — release-notes/<tag>.md per-tag GitHub-release bodies
+registry/                 — registry-era scaffolding (M4 RegistryResolver)
 VERSION                   — single source of version ("0.0.1-dev")
 pyproject.toml            — package metadata; hatchling reads VERSION at build time
 config.json               — project-level allowed_hosts (walked up from recipes/)
@@ -362,32 +372,85 @@ log a between-release / single-repo hotfix tag without a full manomatika release
 ## GitHub Actions Workflows
 
 - **`validate.yml`** — runs on every push and PR to `main`. Installs
-  `pip install -e ".[test]"`, runs `pytest tests/`. A live recipe-validation
-  step is present but commented out, tracked by
-  `manomatika/ahimsa#60`. The blocker condition (v0.0.4-rc.1 tags for matika
-  and eyerate) was met on 2026-06-17; re-enabling is now actionable. Until
-  re-enabled, unit tests cover all validator logic via mocks. Because the
-  validator format-checks only the bare-core version pins (tags are git refs,
-  not version-checked), the step can be re-enabled at rc time.
-- **`build.yml`** — runs on `workflow_dispatch` only (with a `recipe_path`
-  input). The `push: tags: v*` trigger and the `release` job have been removed;
-  ahimsa builds artifacts on demand, never creates GitHub releases. Jobs:
+  `pip install -e ".[test]"`, runs `pytest tests/` (the COMPLETE suite — unit,
+  invocation, AND the real-network integration tier; nothing deselected, per
+  rule 21). A live recipe-validation step (`ahimsa-validate` over `recipes/*`)
+  is **still commented out** in the workflow, tracked by `manomatika/ahimsa#60`.
+  The matika/eyerate rc tags it was blocked on now exist, so re-enabling is a
+  one-line uncomment — but it has NOT been done yet; today the suite's mock-based
+  unit tests cover all validator logic. Because the validator format-checks only
+  the bare-core version pins (tags are git refs, not version-checked), the step
+  can be re-enabled at any rc.
+- **`build.yml`** — runs on `workflow_dispatch` only. Inputs: `recipe_path`
+  (default `recipes/reference-app/recipe.json`) and `manomatika_ref` (branch/tag/SHA
+  in mm to fetch the recipe from — for cross-repo validation builds; default `""`).
+  The `push: tags: v*` trigger and the `release` job have been removed; ahimsa
+  builds artifacts on demand, never creates GitHub releases. Jobs:
   - `validate` → fetches recipe from `manomatika/manomatika`, installs ahimsa,
     runs `ahimsa-validate "$RECIPE_PATH"` (fail fast).
-  - `build-macos-arm` (macos-14), `build-macos-intel` (macos-13),
-    `build-windows` (windows-latest) — all `needs: validate`, run in parallel.
-    **These build jobs are fully implemented, not stubbed:** each fetches recipe
-    from mm, reads recipe metadata, clones matika at `recipe.matika.tag`, clones
-    each applug into `build/matika/plugins/`, runs `npm install && npm run build`,
-    freezes with `pyinstaller matika.spec`, then wraps the output — macOS via
-    `scripts/make_dmg.py` (dmgbuild), Windows via `installer/windows_installer.iss`
-    (Inno Setup) — and uploads the DMG/EXE as a CI artifact.
+  - `build-macos-arm` (**macos-14**), `build-macos-intel` (**macos-15-intel** —
+    `macos-13` was retired), `build-windows` (**windows-latest**) — all
+    `needs: validate`, run in parallel. **Fully implemented, not stubbed.** Each job:
+    1. fetches recipe from mm, reads metadata, clones matika at `recipe.matika.tag`,
+       clones each applug into `build/matika/plugins/`;
+    2. **installs matika's `requirements.txt` AND every `plugins/*/requirements.txt`
+       BEFORE PyInstaller** — so `collect_all()` in `matika.spec` actually finds
+       `alembic`/`curl_cffi`/`yfinance` rather than being a no-op (this ordering is
+       why the freeze stopped failing with "No module named 'alembic'");
+    3. `npm install && npm run build`, then `pyinstaller matika.spec --noconfirm`,
+       asserting the bundle name matches the recipe's product identity;
+    4. wraps the output — macOS via `scripts/make_dmg.py` (dmgbuild); Windows via
+       `installer/windows_installer.iss` driven by **Inno Setup's `ISCC` on the
+       runner PATH** (the bundle/output dirs are passed as absolute `%CD%`-rooted
+       paths; the `.iss` path itself is repo-relative);
+    5. **smoke-launches** the frozen app (`scripts/smoke_launch.py` — boot, migrate,
+       load the `eyerate` applug, serve);
+    6. runs **frozen feature verification on BOTH install paths** —
+       `scripts/frozen_verify.py --scenario fresh` and `--scenario upgrade`, each
+       with `--browser` (tier-a HTTP + tier-b Playwright). The `upgrade` scenario
+       seeds a stale plugin (old version, marker removed, user data added) and
+       asserts the launcher refreshed the code AND preserved the user data;
+    7. uploads the DMG/EXE as a CI artifact.
+
+## Frozen-App Feature Verification (the product QA gate, in CI)
+
+This is the mechanism behind standing rule 22's "exercised against the frozen,
+pinned artifact on BOTH install paths." Three scripts, run by every `build.yml`
+build job after the freeze:
+
+- **`scripts/smoke_launch.py`** — boots the frozen exe, waits for boot markers,
+  asserts first-run schema init (`create_all` + `alembic stamp head`) and that
+  the `eyerate` applug loaded and the app serves. Forces UTF-8 stdout so
+  non-ASCII log lines don't break the Windows runner.
+- **`scripts/frozen_verify.py`** — **tier-a** authenticated-HTTP checks against
+  the booted artifact in a throwaway `HOME`. It logs in **password-agnostically**
+  (accepts the seeded default OR the rotated password, and performs the
+  first-login `/change-password` rotation), then asserts: the `/eyerate/admin`
+  page shows the **"Financial Data Provider"** form and **no "coming soon"**
+  (the stale-plugin tell); a `VOO` search returns real results; and a forced
+  keyless `finnhub` provider yields **HTTP 502 with a `detail` body** — never a
+  silent HTTP 200 empty. Runs two scenarios: `--scenario fresh` and
+  `--scenario upgrade` (the upgrade path seeds a stale `eyerate` — old version,
+  `.matika_plugin_install.json` removed, a `USER_NOTES.txt` added — then asserts
+  the launcher logged a refresh, dropped the stale template, and **preserved**
+  the user file).
+- **`scripts/browser_verify.py`** — **tier-b** headless-Chromium (Playwright)
+  checks, invoked when `frozen_verify.py` is run with `--browser`. Mirrors the
+  password-agnostic login (tier-a runs first and rotates the password), then
+  drives the real UI: the admin form renders the provider control with no
+  "coming soon"; the Securities lookup modal populates VOO rows (and not an
+  `error:` row) and fills `#field-symbol`; and a forced keyless `finnhub`
+  surfaces a visible `error:` in the results list.
+
+Together these turn product-behavior regressions (stale plugin code after an
+upgrade; silent-empty provider failures) into hard CI failures on the frozen
+artifact, on both fresh-install and upgrade-over-stale paths.
 
 ## Architecture Decisions
 
 - Decentralized: recipes point directly at GitHub repos/tags
 - BaseResolver ABC + registry ready for future RegistryResolver (M4)
-- DMG via dmgbuild Python library (macos-14 arm64, macos-13 intel)
+- DMG via dmgbuild Python library (macos-14 arm64, macos-15-intel)
 - Windows installer via Inno Setup
 - Installer artifacts are produced by the engine's build jobs as transient CI
   artifacts. The product release that attaches them is the authority of
@@ -396,14 +459,21 @@ log a between-release / single-repo hotfix tag without a full manomatika release
 ## Workflow Positioning
 
 - Ahimsa is downstream of matika and applug releases — it consumes only released, tagged versions. Steady-state: a matika or applug release → recipe update (in `manomatika/manomatika`) → engine build.
-- **Release / QA flow (target):** tag matika v0.0.4 + eyerate v0.0.4 as
-  **prereleases** → dispatch ahimsa `build.yml` (`workflow_dispatch`, recipe
-  fetched from `manomatika/manomatika`) → QA the x86_64 DMG artifact → on pass,
-  tag ahimsa v0.0.1, author the `manomatika/manomatika` manifest/BOM, and cut
-  the `manomatika/manomatika` product release with the DMG attached there. The
-  prerelease flag is the trust boundary; the `manomatika/manomatika` product
-  release is the only blessed product.
-- v0.0.4 is the exception cycle: ahimsa is being built for the first time (its own version is v0.0.1). matika v0.0.4 and eyerate v0.0.4 will be released first; ahimsa v0.0.1 will then be finalized against those real tags.
+- **Release / QA flow:** tag matika + eyerate as **prereleases** (the cycle is
+  iterating through `v0.0.4-rc.N` candidates — re-pin the mm recipe each rc) →
+  dispatch ahimsa `build.yml` (`workflow_dispatch`, recipe fetched from
+  `manomatika/manomatika`) → the build jobs now **automate the QA gate** in CI
+  (smoke-launch + tier-a/tier-b frozen feature verification on fresh + upgrade
+  paths; see *Frozen-App Feature Verification*) and produce the DMG/EXE → on a
+  green build + DMG QA pass, tag ahimsa v0.0.1, author the
+  `manomatika/manomatika` manifest/BOM, and cut the `manomatika/manomatika`
+  product release with the DMG attached there. The prerelease flag is the trust
+  boundary; the `manomatika/manomatika` product release is the only blessed
+  product.
+- v0.0.4 is the exception cycle: ahimsa is being built for the first time (its
+  own version is v0.0.1, still unreleased — its release-log entry in mm is a
+  `pending` placeholder). matika and eyerate release first; ahimsa v0.0.1 is then
+  finalized against those real tags.
 
 ## Test Fixture Convention
 
