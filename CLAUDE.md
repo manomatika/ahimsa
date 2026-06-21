@@ -115,7 +115,8 @@ see *Release-Notes System & Central Release Log* below.)
   - `Registry` (ahimsa only)
   - `Signing & Distribution` (ahimsa only)
   - `QA & System Test` (ahimsa only)
-  - `v0.0.5 Planning` (eyerate + ahimsa)
+  - `Planning` (matika + eyerate + ahimsa)
+  - `Playwright` (matika only)
   - `Documentation & Release Readiness` — the terminal release gate (all three)
 - **Org-level Project: [ManoMatika Roadmap](https://github.com/orgs/manomatika/projects/1)** is the cross-repo backlog view. Its description records which component versions compose each manomatika release (e.g. ManoMatika v0.0.1 = matika v0.0.4 + eyerate v0.0.4 + ahimsa v0.0.1).
 - **Milestone due dates are the single source of truth for dates.** The roadmap renders timelines from milestone Markers; do NOT create per-item date fields on the Project for scheduling (Pattern A — milestone-driven).
