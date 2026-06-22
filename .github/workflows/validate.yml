@@ -15,6 +15,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -34,7 +43,7 @@ jobs:
 
       - name: Fetch reference recipe from manomatika/manomatika
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           mkdir -p recipes/reference-app
           gh api -H "Accept: application/vnd.github.raw+json" \
@@ -42,6 +51,8 @@ jobs:
             > recipes/reference-app/recipe.json
 
       - name: Validate recipes
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           for recipe in recipes/*/recipe.json; do
             ahimsa-validate "$recipe"
