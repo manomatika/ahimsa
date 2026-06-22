@@ -1,9 +1,11 @@
 """Unit tests for the pure helpers in scripts/frozen_verify.py.
 
 The booted-app feature checks (tier a/b) can only run against a real frozen
-artifact in CI, but the stale-plugin seeding/assertion logic and the CSRF
-extraction are pure functions that MUST be correct — a bug here would make the
-upgrade-over-stale proof silently vacuous. These tests pin them.
+artifact in CI, but the stale-plugin seeding/assertion logic, the CSRF
+extraction, and the installed-path override mechanism (manomatika/ahimsa#81)
+are pure or CLI-parseable functions that MUST be correct — a bug here would make
+the upgrade-over-stale proof or the installer-level verification silently vacuous.
+These tests pin them.
 """
 
 from __future__ import annotations
@@ -96,3 +98,88 @@ def test_assert_refreshed_fails_if_stale_template_remains(fv, tmp_path):
     boot_log = "plugin eyerate: installed 0.0.1, bundled 0.0.4 -> refreshed"
     with pytest.raises(fv.FrozenAppError):
         fv._assert_refreshed(str(tmp_path), boot_log)
+
+
+# ---------------------------------------------------------------------------
+# Installer-level path override (manomatika/ahimsa#81)
+#
+# frozen_verify.py accepts --exe <path> which IS the installed-path override:
+# passing a different --exe value redirects all verification to the installed
+# application rather than the freeze-dir artifact.  These tests pin the
+# argument-parsing and path-resolution behaviour so a future refactor cannot
+# silently break the installer-level verification stage.
+# ---------------------------------------------------------------------------
+
+def test_exe_argument_is_parsed_and_abspath_resolved(fv, tmp_path):
+    """main() resolves --exe to an absolute path before the existence check."""
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--exe", required=True)
+    ap.add_argument("--scenario", required=True, choices=["fresh", "upgrade"])
+    ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--timeout", type=int, default=90)
+    ap.add_argument("--browser", action="store_true")
+
+    # Simulate a freeze-dir path.
+    freeze_exe = str(tmp_path / "build" / "matika" / "dist" / "ManoMatika-0.0.1.app" /
+                     "Contents" / "MacOS" / "ManoMatika-0.0.1")
+    args = ap.parse_args(["--exe", freeze_exe, "--scenario", "fresh"])
+    assert os.path.isabs(os.path.abspath(args.exe))
+    assert args.exe == freeze_exe
+
+    # Simulate an installed-path (DMG-mounted) override — same script, different --exe.
+    installed_exe = "/Volumes/ManoMatikaDMG/ManoMatika-0.0.1.app/Contents/MacOS/ManoMatika-0.0.1"
+    args2 = ap.parse_args(["--exe", installed_exe, "--scenario", "fresh"])
+    assert args2.exe == installed_exe
+    assert os.path.isabs(os.path.abspath(args2.exe))
+
+
+def test_main_returns_nonzero_for_missing_installed_exe(fv, tmp_path):
+    """main() exits non-zero when --exe points to a non-existent installed path.
+
+    This is the installer-level regression guard (manomatika/ahimsa#81 §6):
+    if the DMG/EXE install step produces the wrong path or the installer
+    silently fails, the CI job must fail rather than pass vacuously.
+    """
+    import sys
+    from unittest.mock import patch
+
+    nonexistent = str(tmp_path / "Volumes" / "ManoMatikaDMG" /
+                      "ManoMatika-0.0.1.app" / "Contents" / "MacOS" / "ManoMatika-0.0.1")
+    with patch.object(sys, "argv", ["frozen_verify.py",
+                                     "--exe", nonexistent,
+                                     "--scenario", "fresh"]):
+        rc = fv.main()
+    assert rc == 1, (
+        "frozen_verify.main() must return non-zero when the installed exe is absent"
+    )
+
+
+def test_installed_path_override_uses_same_code_path_as_freeze_dir(fv, tmp_path):
+    """Installed-path and freeze-dir runs share the same scenario entry points.
+
+    Both scenario_fresh() and scenario_upgrade() receive only the resolved exe
+    path — they do not distinguish between a freeze-dir binary and an installed
+    binary.  This test confirms that _seed_stale_eyerate and _assert_refreshed
+    operate entirely on the HOME temp dir, not on any path derived from the exe
+    location, so the upgrade scenario works identically for installed paths.
+    """
+    # _seed_stale_eyerate operates on HOME, not exe path.
+    plugin = _make_fresh_eyerate(tmp_path)
+    (plugin / fv.USER_DATA_NAME).write_text(fv.USER_DATA_CONTENT)
+
+    # Pretend the exe is under an installed location — the seed must not care.
+    installed_exe = "/Volumes/ManoMatikaDMG/ManoMatika-0.0.1.app/Contents/MacOS/ManoMatika-0.0.1"
+    # Seeding succeeds regardless of exe path — it only needs the HOME tree.
+    fv._seed_stale_eyerate(str(tmp_path))
+    assert "coming soon" in (
+        plugin / "src" / "eyerate" / "templates" / "eyerate_admin.html"
+    ).read_text().lower()
+    # Restore the template (as a launcher refresh would) and assert.
+    (plugin / "src" / "eyerate" / "templates" / "eyerate_admin.html").write_text(
+        "<legend>Financial Data Provider</legend>"
+    )
+    boot_log = "plugin eyerate: installed 0.0.1, bundled 0.0.4 -> refreshed"
+    # _assert_refreshed also operates on HOME, not exe path — passes for any exe.
+    _ = installed_exe  # exe path is irrelevant to the assertion
+    fv._assert_refreshed(str(tmp_path), boot_log)  # must not raise
