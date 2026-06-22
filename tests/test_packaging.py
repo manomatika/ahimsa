@@ -80,7 +80,11 @@ def test_installed_console_scripts_load():
 
     ahimsa_eps = {ep.name: ep for ep in eps if ep.name in EXPECTED_SCRIPTS}
     if not ahimsa_eps:
-        pytest.skip("ahimsa is not installed in this interpreter")
+        pytest.fail(
+            "ahimsa console scripts not found in this interpreter's entry points. "
+            "Run the suite via `uv run pytest tests/` so pytest resolves inside the "
+            "uv venv where ahimsa is installed."
+        )
 
     for name, ep in sorted(ahimsa_eps.items()):
         loaded = ep.load()
