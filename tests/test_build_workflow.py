@@ -74,8 +74,8 @@ def test_validate_job_uses_installed_validator(workflow):
     assert "ahimsa-validate" in runs, (
         "validate job must invoke the ahimsa-validate console script"
     )
-    # The console script only exists after the package is installed.
-    assert "pip install -e ." in runs
+    # The console script only exists after the package is installed via uv.
+    assert "uv sync" in runs
 
 
 @pytest.mark.parametrize("job_name", BUILD_JOBS)

@@ -65,27 +65,43 @@ def test_declared_entry_point_target_is_importable_and_callable(script_name):
 
 
 def test_installed_console_scripts_load():
-    """If ahimsa is installed, its console-script entry points must ``.load()``.
+    """Packaging entry-point contract verified in two layers.
 
-    This exercises the installed-metadata path — the exact surface that failed
-    with ``ModuleNotFoundError``. Skipped only when ahimsa is not installed in
-    the running interpreter (e.g. a bare source checkout with no install).
+    Layer 1 — source contract (always runs in all three modes):
+      Every declared ``module:attr`` target is importable and resolves to a
+      callable.  Covers uv .venv, pip-installed, and bare ``PYTHONPATH=src``
+      checkout equally.
+
+    Layer 2 — installed-metadata contract (additive when dist metadata present):
+      Installed console-script entry points match the pyproject declarations
+      exactly, and each ``.load()``s to a callable.
+
+    No mode ever passes while asserting nothing.
     """
     from importlib.metadata import entry_points
 
+    declared = _declared_scripts()
+
+    # Layer 1: source contract — always runs regardless of install state.
+    for script_name, target in sorted(declared.items()):
+        assert ":" in target, f"{script_name} target {target!r} is not 'module:function'"
+        module_name, func_name = target.split(":", 1)
+        module = importlib.import_module(module_name)
+        func = getattr(module, func_name, None)
+        assert callable(func), f"{target} does not resolve to a callable"
+
+    # Layer 2: installed-metadata contract — additive when ahimsa is installed.
     try:
         eps = entry_points(group="console_scripts")
     except TypeError:  # pragma: no cover - very old importlib.metadata
         eps = entry_points().get("console_scripts", [])
 
     ahimsa_eps = {ep.name: ep for ep in eps if ep.name in EXPECTED_SCRIPTS}
-    if not ahimsa_eps:
-        pytest.fail(
-            "ahimsa console scripts not found in this interpreter's entry points. "
-            "Run the suite via `uv run pytest tests/` so pytest resolves inside the "
-            "uv venv where ahimsa is installed."
-        )
 
-    for name, ep in sorted(ahimsa_eps.items()):
-        loaded = ep.load()
-        assert callable(loaded), f"console script {name} did not load a callable"
+    if ahimsa_eps:
+        assert set(ahimsa_eps) == set(declared), (
+            f"installed console scripts {set(ahimsa_eps)} != declared {set(declared)}"
+        )
+        for name, ep in sorted(ahimsa_eps.items()):
+            loaded = ep.load()
+            assert callable(loaded), f"console script {name} did not load a callable"

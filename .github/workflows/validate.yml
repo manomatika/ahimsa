@@ -28,8 +28,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install ahimsa and test dependencies
-        run: pip install -e ".[test]"
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install ahimsa and test dependencies via uv
+        run: uv sync --frozen
 
       # Runs the COMPLETE suite — unit, invocation, AND the real-network
       # integration tier (no deselection). GITHUB_TOKEN is the auto-provisioned
@@ -39,7 +42,7 @@ jobs:
       - name: Run full test suite (unit + invocation + integration)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: pytest tests/
+        run: uv run pytest tests/
 
       - name: Fetch reference recipe from manomatika/manomatika
         env:
@@ -55,5 +58,5 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           for recipe in recipes/*/recipe.json; do
-            ahimsa-validate "$recipe"
+            uv run ahimsa-validate "$recipe"
           done
