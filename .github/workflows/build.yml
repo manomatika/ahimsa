@@ -908,6 +908,315 @@ jobs:
           path: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-windows-x86_64.exe
 
   # ---------------------------------------------------------------------------
+  # INSTALL-VERIFY — macOS Apple Silicon (macos-14)
+  # Downloads the DMG produced by build-macos-arm, mounts it, and re-runs
+  # smoke_launch + frozen_verify against the INSTALLED application path — both
+  # the fresh-install and upgrade-over-stale scenarios.
+  # ---------------------------------------------------------------------------
+  install-verify-macos-arm:
+    runs-on: macos-14
+    needs: build-macos-arm
+    env:
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Fetch recipe from manomatika/manomatika
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          mkdir -p "$(dirname "$RECIPE_PATH")"
+          MANOMATIKA_REF="${{ inputs.manomatika_ref }}"
+          REF_QUERY="${MANOMATIKA_REF:+?ref=${MANOMATIKA_REF}}"
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/manomatika/manomatika/contents/${RECIPE_PATH}${REF_QUERY}" > "$RECIPE_PATH"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install verification dependencies (requests + Playwright Chromium)
+        shell: bash
+        run: |
+          python -m pip install --upgrade requests playwright
+          python -m playwright install chromium
+
+      - name: Read recipe metadata
+        id: recipe_info
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          app = r["application"]
+          product_name = app["product_name"]
+          product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
+          product_ver  = app["version"]
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a") as f:
+              f.write(f"product_name={product_name}\n")
+              f.write(f"product_slug={product_slug}\n")
+              f.write(f"product_version={product_ver}\n")
+          print(f"Product  : {product_name} v{product_ver}")
+          print(f"Slug     : {product_slug}")
+          PYEOF
+
+      - name: Download DMG artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-macos-arm64.dmg
+
+      - name: Mount DMG and verify installed application
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+          PRODUCT_SLUG: ${{ steps.recipe_info.outputs.product_slug }}
+        run: |
+          # The DMG filename uses the lowercase slug convention.
+          DMG_NAME="${PRODUCT_SLUG}-${PRODUCT_VERSION}-macos-arm64.dmg"
+          MOUNTPOINT="/Volumes/ManoMatikaDMG-arm"
+          # Mount the DMG at a fixed mountpoint so the exe path is deterministic.
+          hdiutil attach "${DMG_NAME}" -mountpoint "${MOUNTPOINT}" -nobrowse -quiet
+          trap 'hdiutil detach "${MOUNTPOINT}" -quiet || true' EXIT
+          # The installed .app has the same product-identity name as the bundle
+          # produced by matika.spec (e.g. ManoMatika-0.0.1.app).
+          EXE="${MOUNTPOINT}/${PRODUCT_NAME}-${PRODUCT_VERSION}.app/Contents/MacOS/${PRODUCT_NAME}-${PRODUCT_VERSION}"
+          echo "Installed exe: ${EXE}"
+          if [ ! -f "${EXE}" ]; then
+            echo "::error::installed exe not found at ${EXE}"
+            ls -la "${MOUNTPOINT}/" || true
+            exit 1
+          fi
+          # Smoke-launch the installed application (proves the DMG ships a
+          # launchable bundle, not just the freeze-dir artifact).
+          python scripts/smoke_launch.py --exe "${EXE}" --expect-plugin eyerate --timeout 90
+          # Feature-level checks against the INSTALLED exe on both install paths
+          # (standing rule 22 — installer-level gap, manomatika/ahimsa#81).
+          # The --exe flag is the "equivalent" path override described in #81 §5:
+          # the same script serves both freeze-dir and installed-dir runs by
+          # passing a different --exe value.
+          python scripts/frozen_verify.py --exe "${EXE}" --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "${EXE}" --scenario upgrade --browser --timeout 120
+
+  # ---------------------------------------------------------------------------
+  # INSTALL-VERIFY — macOS Intel (macos-15-intel)
+  # ---------------------------------------------------------------------------
+  install-verify-macos-intel:
+    runs-on: macos-15-intel
+    needs: build-macos-intel
+    env:
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Fetch recipe from manomatika/manomatika
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          mkdir -p "$(dirname "$RECIPE_PATH")"
+          MANOMATIKA_REF="${{ inputs.manomatika_ref }}"
+          REF_QUERY="${MANOMATIKA_REF:+?ref=${MANOMATIKA_REF}}"
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/manomatika/manomatika/contents/${RECIPE_PATH}${REF_QUERY}" > "$RECIPE_PATH"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install verification dependencies (requests + Playwright Chromium)
+        shell: bash
+        run: |
+          python -m pip install --upgrade requests playwright
+          python -m playwright install chromium
+
+      - name: Read recipe metadata
+        id: recipe_info
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          app = r["application"]
+          product_name = app["product_name"]
+          product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
+          product_ver  = app["version"]
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a") as f:
+              f.write(f"product_name={product_name}\n")
+              f.write(f"product_slug={product_slug}\n")
+              f.write(f"product_version={product_ver}\n")
+          print(f"Product  : {product_name} v{product_ver}")
+          print(f"Slug     : {product_slug}")
+          PYEOF
+
+      - name: Download DMG artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-macos-x86_64.dmg
+
+      - name: Mount DMG and verify installed application
+        shell: bash
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+          PRODUCT_SLUG: ${{ steps.recipe_info.outputs.product_slug }}
+        run: |
+          DMG_NAME="${PRODUCT_SLUG}-${PRODUCT_VERSION}-macos-x86_64.dmg"
+          MOUNTPOINT="/Volumes/ManoMatikaDMG-intel"
+          hdiutil attach "${DMG_NAME}" -mountpoint "${MOUNTPOINT}" -nobrowse -quiet
+          trap 'hdiutil detach "${MOUNTPOINT}" -quiet || true' EXIT
+          EXE="${MOUNTPOINT}/${PRODUCT_NAME}-${PRODUCT_VERSION}.app/Contents/MacOS/${PRODUCT_NAME}-${PRODUCT_VERSION}"
+          echo "Installed exe: ${EXE}"
+          if [ ! -f "${EXE}" ]; then
+            echo "::error::installed exe not found at ${EXE}"
+            ls -la "${MOUNTPOINT}/" || true
+            exit 1
+          fi
+          python scripts/smoke_launch.py --exe "${EXE}" --expect-plugin eyerate --timeout 90
+          python scripts/frozen_verify.py --exe "${EXE}" --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "${EXE}" --scenario upgrade --browser --timeout 120
+
+  # ---------------------------------------------------------------------------
+  # INSTALL-VERIFY — Windows x86_64
+  # Downloads the EXE installer produced by build-windows, silently installs it,
+  # and re-runs smoke_launch + frozen_verify against the INSTALLED path — both
+  # the fresh-install and upgrade-over-stale scenarios.
+  # ---------------------------------------------------------------------------
+  install-verify-windows:
+    runs-on: windows-latest
+    needs: build-windows
+    env:
+      RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Fetch recipe from manomatika/manomatika
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          mkdir -p "$(dirname "$RECIPE_PATH")"
+          MANOMATIKA_REF="${{ inputs.manomatika_ref }}"
+          REF_QUERY="${MANOMATIKA_REF:+?ref=${MANOMATIKA_REF}}"
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/manomatika/manomatika/contents/${RECIPE_PATH}${REF_QUERY}" > "$RECIPE_PATH"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install verification dependencies (requests + Playwright Chromium)
+        shell: bash
+        run: |
+          python -m pip install --upgrade requests playwright
+          python -m playwright install chromium
+
+      - name: Read recipe metadata
+        id: recipe_info
+        shell: bash
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          app = r["application"]
+          product_name = app["product_name"]
+          product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
+          product_ver  = app["version"]
+          out = os.environ["GITHUB_OUTPUT"]
+          with open(out, "a") as f:
+              f.write(f"product_name={product_name}\n")
+              f.write(f"product_slug={product_slug}\n")
+              f.write(f"product_version={product_ver}\n")
+          print(f"Product  : {product_name} v{product_ver}")
+          print(f"Slug     : {product_slug}")
+          PYEOF
+
+      - name: Download installer EXE artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-windows-x86_64.exe
+
+      - name: Silent-install EXE and verify installed application
+        shell: cmd
+        env:
+          PRODUCT_NAME: ${{ steps.recipe_info.outputs.product_name }}
+          PRODUCT_VERSION: ${{ steps.recipe_info.outputs.product_version }}
+          PRODUCT_SLUG: ${{ steps.recipe_info.outputs.product_slug }}
+        run: |
+          @echo off
+          REM The Inno Setup installer places the app under %ProgramFiles%\<AppName>
+          REM (DefaultDirName={autopf}\{#MyAppName} in windows_installer.iss).
+          REM /SILENT suppresses the UI but respects the default install dir;
+          REM /NORESTART prevents any automated reboot on the runner.
+          set "INSTALLER=%PRODUCT_SLUG%-%PRODUCT_VERSION%-windows-x86_64.exe"
+          echo Installing: %INSTALLER%
+          "%INSTALLER%" /SILENT /NORESTART
+          if errorlevel 1 (
+            echo ::error::Inno Setup silent install exited with error
+            exit /b 1
+          )
+          REM The installed EXE path follows Inno Setup's convention:
+          REM   %ProgramFiles%\<AppName>\<AppName>-<Version>.exe
+          REM (matching DefaultDirName and MyAppExeName in windows_installer.iss)
+          set "INSTALL_DIR=%ProgramFiles%\%PRODUCT_NAME%"
+          set "EXE=%INSTALL_DIR%\%PRODUCT_NAME%-%PRODUCT_VERSION%.exe"
+          echo Installed exe: %EXE%
+          if not exist "%EXE%" (
+            echo ::error::installed exe not found at %EXE%
+            dir "%INSTALL_DIR%" 2>nul || echo Install dir does not exist
+            exit /b 1
+          )
+          REM Smoke-launch the installed application.
+          python scripts/smoke_launch.py --exe "%EXE%" --expect-plugin eyerate --timeout 90
+          if errorlevel 1 exit /b 1
+          REM Feature-level checks on both install paths against the INSTALLED exe.
+          REM The --exe flag is the "equivalent" installed-path override (ahimsa#81 §5).
+          python scripts/frozen_verify.py --exe "%EXE%" --scenario fresh   --browser --timeout 120
+          if errorlevel 1 exit /b 1
+          python scripts/frozen_verify.py --exe "%EXE%" --scenario upgrade --browser --timeout 120
+          if errorlevel 1 exit /b 1
+
+  # ---------------------------------------------------------------------------
   # REFRESH RELEASES.MD — workflow_dispatch only
   # Checks out manomatika/manomatika, renders RELEASES.md from its
   # release-log.yaml, and opens a PR to mm (not to ahimsa).
