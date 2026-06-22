@@ -65,20 +65,32 @@ def test_declared_entry_point_target_is_importable_and_callable(script_name):
 
 
 def test_installed_console_scripts_load():
-    """When ahimsa is installed, dist-metadata entry points must exactly match
-    pyproject.toml declarations and ``.load()`` to callables.
+    """Packaging entry-point contract verified in two layers.
 
-    Portable across all three run modes without skipping or failing:
-    (a) ``uv run pytest tests/`` in a synced uv .venv,
-    (b) ``pip install -e ".[test]"`` then ``pytest tests/``,
-    (c) bare ``PYTHONPATH=src`` checkout with no install.
-    In mode (c) dist metadata is absent; the pyproject-based importability
-    tests above already cover the entry-point contract in that case.
+    Layer 1 — source contract (always runs in all three modes):
+      Every declared ``module:attr`` target is importable and resolves to a
+      callable.  Covers uv .venv, pip-installed, and bare ``PYTHONPATH=src``
+      checkout equally.
+
+    Layer 2 — installed-metadata contract (additive when dist metadata present):
+      Installed console-script entry points match the pyproject declarations
+      exactly, and each ``.load()``s to a callable.
+
+    No mode ever passes while asserting nothing.
     """
     from importlib.metadata import entry_points
 
     declared = _declared_scripts()
 
+    # Layer 1: source contract — always runs regardless of install state.
+    for script_name, target in sorted(declared.items()):
+        assert ":" in target, f"{script_name} target {target!r} is not 'module:function'"
+        module_name, func_name = target.split(":", 1)
+        module = importlib.import_module(module_name)
+        func = getattr(module, func_name, None)
+        assert callable(func), f"{target} does not resolve to a callable"
+
+    # Layer 2: installed-metadata contract — additive when ahimsa is installed.
     try:
         eps = entry_points(group="console_scripts")
     except TypeError:  # pragma: no cover - very old importlib.metadata
@@ -86,15 +98,10 @@ def test_installed_console_scripts_load():
 
     ahimsa_eps = {ep.name: ep for ep in eps if ep.name in EXPECTED_SCRIPTS}
 
-    if not ahimsa_eps:
-        # Not installed in this interpreter — the pyproject-based tests above
-        # already verified importability.  Nothing to assert here.
-        return
-
-    # Installed: installed entry points must exactly match pyproject declarations.
-    assert set(ahimsa_eps) == set(declared), (
-        f"installed console scripts {set(ahimsa_eps)} != declared {set(declared)}"
-    )
-    for name, ep in sorted(ahimsa_eps.items()):
-        loaded = ep.load()
-        assert callable(loaded), f"console script {name} did not load a callable"
+    if ahimsa_eps:
+        assert set(ahimsa_eps) == set(declared), (
+            f"installed console scripts {set(ahimsa_eps)} != declared {set(declared)}"
+        )
+        for name, ep in sorted(ahimsa_eps.items()):
+            loaded = ep.load()
+            assert callable(loaded), f"console script {name} did not load a callable"
