@@ -48,8 +48,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install ahimsa
-        run: pip install -e .
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install ahimsa via uv
+        run: uv sync --frozen
 
       - name: Validate recipe (fail fast)
         env:
@@ -58,7 +61,7 @@ jobs:
           # inside ahimsa-validate to the same branch used for the recipe fetch.
           # Only set when manomatika_ref is non-empty (cross-repo validation).
           MANOMATIKA_REF: ${{ inputs.manomatika_ref }}
-        run: ahimsa-validate "$RECIPE_PATH"
+        run: uv run ahimsa-validate "$RECIPE_PATH"
 
   # ---------------------------------------------------------------------------
   # BUILD — macOS Apple Silicon (macos-14)
@@ -1256,15 +1259,18 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install ahimsa
-        run: pip install -e .
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install ahimsa via uv
+        run: uv sync --frozen
 
       - name: Render RELEASES.md
         env:
           RELEASE_LOG_PATH: mm/release-log.yaml
           RELEASES_MD_PATH: mm/RELEASES.md
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: python scripts/render_releases_md.py
+        run: uv run python scripts/render_releases_md.py
 
       - name: Open PR to manomatika/manomatika with updated RELEASES.md
         env:
