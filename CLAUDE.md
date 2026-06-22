@@ -213,13 +213,19 @@ full rationale). On a Homebrew-Python / PEP 668 macOS host **never**
 `/opt/homebrew/bin/ahimsa-*` shims (`ModuleNotFoundError: No module named
 'ahimsa'`).
 
-**Tests** — a project venv:
+**Tests — canonical uv flow (rule 21):**
 
 ```
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[test]"
-pytest tests/
+uv sync                 # installs ahimsa + pytest into .venv (dev group)
+uv run pytest tests/    # runs the COMPLETE suite — 0 failed / 0 skipped / 0 xfail / 0 deselected / 0 warnings
 ```
+
+`uv run` resolves to the venv pytest (where ahimsa is installed), satisfying
+rule 21. Pytest is declared in `[dependency-groups] dev` (PEP 735) so
+`uv sync` always installs it without extra flags.
+
+Note: `validate.yml` CI still installs via `pip install -e ".[test]"` and runs
+`pytest tests/` — aligning CI onto uv is a separate follow-up.
 
 **Global on-PATH `ahimsa-*` commands** — pipx, editable so they track this
 source tree:
@@ -236,12 +242,6 @@ ahimsa-validate <path/to/recipe.json>                    # console-script entry 
 python3 -m ahimsa.validate_recipe <recipe>      # module invocation
 python3 ahimsa/validate_recipe.py <recipe>      # direct file
 python3 -c "from ahimsa.validate_recipe import validate; ..."
-```
-
-Run tests:
-
-```
-pytest tests/
 ```
 
 ## Running the Validator
