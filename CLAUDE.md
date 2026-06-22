@@ -83,7 +83,7 @@ see *Release-Notes System & Central Release Log* below.)
 
 - **The user does all git review and merges in the browser.** Don't merge PRs, push to main, or tag releases unless explicitly instructed.
 - **Don't stage or commit unless explicitly granted.** The user handles `git add` / `git commit` manually by default. When granted, follow the conventional-commit pattern (`docs:`, `fix:`, `feat:`, `refactor:`, etc.) and include `Closes manomatika/<repo>#N` (fully qualified) where applicable.
-- **Cross-repo issue/PR references must always be fully qualified.** Write `manomatika/matika#N`, `manomatika/eyerate#N`, `manomatika/ahimsa#N` — never a bare `#N` for an issue that lives in a different repo. Bare refs have caused real damage: a misqualified `Closes #11` / `Closes #12` in matika PR #35 closed unrelated issues in another repo's tracker. Bare refs are only safe when the PR and the issue are in the same repo.
+- **Cross-repo issue/PR references must always be fully qualified.** Write `manomatika/matika#N`, `manomatika/eyerate#N`, `manomatika/ahimsa#N` — never a bare `#N` for an issue that lives in a different repo. Bare refs have caused real damage: a misqualified `Closes #11` / `Closes #12` in matika PR #35 closed unrelated issues in another repo's tracker. Bare refs are only safe when the PR and the issue are in the same repo. Cross-repo `Closes` references only cross-link — they do NOT auto-close; close manually after merge.
 - **cc does not run `git merge` locally.** Integration of branches is done by the user via PR merge in the browser. For any local branch updates cc performs, use `git rebase` or `git cherry-pick`. cc may run `rm -rf` ONLY within a repo working directory under `~/dev/projects/` (a clone `~/dev/projects/<repo>/` or a worktree `~/dev/projects/<repo>-<branch>/`) or under `~/dev/projects/cc_output/` — never anywhere else on the filesystem, and never with an unanchored or variable-expanded path that could resolve outside them. Targeted `git rm` for tracked files remains the norm; `rm -rf` is the constrained exception (rule 23).
 - **`VERSION` is the single source of truth** for version metadata in this repo. Never hand-edit version literals in other files; release tooling propagates from `VERSION`.
 - **The user uses git worktrees** for parallel work (e.g. `~/dev/projects/matika-45/` alongside `~/dev/projects/matika/` on a separate branch). At any moment, the user may be operating in any of several working directories for the same repo. Always check the current branch (`git branch --show-current`) and confirm it matches what you expect before assuming.
@@ -224,8 +224,7 @@ uv run pytest tests/    # runs the COMPLETE suite — 0 failed / 0 skipped / 0 x
 rule 21. Pytest is declared in `[dependency-groups] dev` (PEP 735) so
 `uv sync` always installs it without extra flags.
 
-Note: `validate.yml` CI still installs via `pip install -e ".[test]"` and runs
-`pytest tests/` — aligning CI onto uv is a separate follow-up.
+Both `validate.yml` and `build.yml` install ahimsa via uv (`pip install uv` → `uv sync --frozen` → `uv run …`), matching the local canonical flow.
 
 **Global on-PATH `ahimsa-*` commands** — pipx, editable so they track this
 source tree:
@@ -372,23 +371,13 @@ log a between-release / single-repo hotfix tag without a full manomatika release
 
 ## GitHub Actions Workflows
 
-- **`validate.yml`** — runs on every push and PR to `main`. Installs
-  `pip install -e ".[test]"`, runs `pytest tests/` (the COMPLETE suite — unit,
-  invocation, AND the real-network integration tier; nothing deselected, per
-  rule 21). A live recipe-validation step (`ahimsa-validate` over `recipes/*`)
-  is **still commented out** in the workflow, tracked by `manomatika/ahimsa#60`.
-  The matika/eyerate rc tags it was blocked on now exist, so re-enabling is a
-  one-line uncomment — but it has NOT been done yet; today the suite's mock-based
-  unit tests cover all validator logic. Because the validator format-checks only
-  the bare-core version pins (tags are git refs, not version-checked), the step
-  can be re-enabled at any rc.
+- **`validate.yml`** — runs on every push and PR to `main`. Installs via `pip install uv` → `uv sync --frozen` → `uv run pytest tests/` (the COMPLETE suite — unit, invocation, AND the real-network integration tier; nothing deselected, per rule 21). Mints a GitHub App token (`permission-contents: read`) and fetches the reference recipe from `manomatika/manomatika`, then runs `uv run ahimsa-validate "$RECIPE_PATH"` as a live recipe-validation step.
 - **`build.yml`** — runs on `workflow_dispatch` only. Inputs: `recipe_path`
   (default `recipes/reference-app/recipe.json`) and `manomatika_ref` (branch/tag/SHA
   in mm to fetch the recipe from — for cross-repo validation builds; default `""`).
   The `push: tags: v*` trigger and the `release` job have been removed; ahimsa
   builds artifacts on demand, never creates GitHub releases. Jobs:
-  - `validate` → fetches recipe from `manomatika/manomatika`, installs ahimsa,
-    runs `ahimsa-validate "$RECIPE_PATH"` (fail fast).
+  - `validate` → fetches recipe from `manomatika/manomatika` (using a minted App token, `permission-contents: write`), installs ahimsa via `pip install uv` → `uv sync --frozen`, runs `uv run ahimsa-validate "$RECIPE_PATH"` (fail fast).
   - `build-macos-arm` (**macos-14**), `build-macos-intel` (**macos-15-intel** —
     `macos-13` was retired), `build-windows` (**windows-latest**) — all
     `needs: validate`, run in parallel. **Fully implemented, not stubbed.** Each job:
@@ -412,6 +401,7 @@ log a between-release / single-repo hotfix tag without a full manomatika release
        seeds a stale plugin (old version, marker removed, user data added) and
        asserts the launcher refreshed the code AND preserved the user data;
     7. uploads the DMG/EXE as a CI artifact.
+  - `install-verify-macos-arm` (**macos-14**), `install-verify-macos-intel` (**macos-15-intel**), `install-verify-windows` (**windows-latest**) — each `needs` its corresponding build job. Downloads the DMG/EXE artifact, mounts/installs it to the OS-standard install path, then re-runs `smoke_launch.py` + `frozen_verify.py --scenario fresh` and `--scenario upgrade` against the **installed** binary (not the freeze-dir artifact). Closes the installer-level gap: proves the packaged DMG/EXE ships a launchable bundle at the correct install path, and that feature checks pass on both install paths from the installed location.
 
 ## Frozen-App Feature Verification (the product QA gate, in CI)
 
