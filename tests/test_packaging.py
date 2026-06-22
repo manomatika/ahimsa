@@ -65,13 +65,19 @@ def test_declared_entry_point_target_is_importable_and_callable(script_name):
 
 
 def test_installed_console_scripts_load():
-    """If ahimsa is installed, its console-script entry points must ``.load()``.
+    """When ahimsa is installed, dist-metadata entry points must exactly match
+    pyproject.toml declarations and ``.load()`` to callables.
 
-    This exercises the installed-metadata path — the exact surface that failed
-    with ``ModuleNotFoundError``. Skipped only when ahimsa is not installed in
-    the running interpreter (e.g. a bare source checkout with no install).
+    Portable across all three run modes without skipping or failing:
+    (a) ``uv run pytest tests/`` in a synced uv .venv,
+    (b) ``pip install -e ".[test]"`` then ``pytest tests/``,
+    (c) bare ``PYTHONPATH=src`` checkout with no install.
+    In mode (c) dist metadata is absent; the pyproject-based importability
+    tests above already cover the entry-point contract in that case.
     """
     from importlib.metadata import entry_points
+
+    declared = _declared_scripts()
 
     try:
         eps = entry_points(group="console_scripts")
@@ -79,13 +85,16 @@ def test_installed_console_scripts_load():
         eps = entry_points().get("console_scripts", [])
 
     ahimsa_eps = {ep.name: ep for ep in eps if ep.name in EXPECTED_SCRIPTS}
-    if not ahimsa_eps:
-        pytest.fail(
-            "ahimsa console scripts not found in this interpreter's entry points. "
-            "Run the suite via `uv run pytest tests/` so pytest resolves inside the "
-            "uv venv where ahimsa is installed."
-        )
 
+    if not ahimsa_eps:
+        # Not installed in this interpreter — the pyproject-based tests above
+        # already verified importability.  Nothing to assert here.
+        return
+
+    # Installed: installed entry points must exactly match pyproject declarations.
+    assert set(ahimsa_eps) == set(declared), (
+        f"installed console scripts {set(ahimsa_eps)} != declared {set(declared)}"
+    )
     for name, ep in sorted(ahimsa_eps.items()):
         loaded = ep.load()
         assert callable(loaded), f"console script {name} did not load a callable"
