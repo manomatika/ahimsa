@@ -15,6 +15,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -32,15 +41,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pytest tests/
 
-      # TODO(manomatika/ahimsa#60): re-enable after manomatika/matika and
-      # manomatika/eyerate publish their v0.0.4 (or v0.0.4-rc.N) tags. The live
-      # remote-fetch step always fails until those tags exist; unit tests cover
-      # all validator logic via mocks. The validator accepts pre-release TAGS
-      # (e.g. v0.0.4-rc.1) — only the bare-core version PINS are format-checked —
-      # so this step can be re-enabled at rc time, not only at final. Re-enable
-      # as a one-line uncomment.
-      # - name: Validate recipes
-      #   run: |
-      #     for recipe in recipes/*/recipe.json; do
-      #       ahimsa-validate "$recipe"
-      #     done
+      - name: Fetch reference recipe from manomatika/manomatika
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          mkdir -p recipes/reference-app
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/manomatika/manomatika/contents/recipes/reference-app/recipe.json" \
+            > recipes/reference-app/recipe.json
+
+      - name: Validate recipes
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          for recipe in recipes/*/recipe.json; do
+            ahimsa-validate "$recipe"
+          done
