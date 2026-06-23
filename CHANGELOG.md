@@ -7,7 +7,7 @@ All notable changes to ahimsa are documented here.
 ## [Unreleased]
 
 ### Added
-- *(nothing yet)*
+- `validate.yml`: add `workflow_dispatch` trigger so the workflow can be run on demand (e.g. after a key rotation).
 
 ---
 
