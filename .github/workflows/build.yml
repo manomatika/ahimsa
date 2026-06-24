@@ -996,7 +996,7 @@ jobs:
           PYEOF
 
       - name: Download DMG artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-macos-arm64.dmg
 
@@ -1098,7 +1098,7 @@ jobs:
           PYEOF
 
       - name: Download DMG artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-macos-x86_64.dmg
 
@@ -1193,7 +1193,7 @@ jobs:
           PYEOF
 
       - name: Download installer EXE artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ steps.recipe_info.outputs.product_slug }}-${{ steps.recipe_info.outputs.product_version }}-windows-x86_64.exe
 
