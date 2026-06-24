@@ -198,3 +198,7 @@ Concretely:
   be re-tested before being included in a recipe targeting the new minor.
 - ahimsa enforces this at recipe-validation time: mismatched `matika_version`
   values are a hard error.
+
+## License
+
+ManoMatika is **source-available, not open-source**. Copyright (c) 2026 Patrick James Tallman. All rights reserved. The source is published for reference and transparency only; no usage, copying, modification, redistribution, or deployment rights are granted without a written agreement. See [LICENSE](LICENSE).
