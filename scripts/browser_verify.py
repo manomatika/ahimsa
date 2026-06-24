@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
 """browser_verify.py — TIER (b) headless-browser / DOM checks (Playwright).
 
-Drives a real headless Chromium against the running frozen product to prove the
-EyeRate UI actually WORKS end-to-end through the DOM — the layer the HTTP checks
-in frozen_verify.py cannot see (rendered templates, JS fetch wiring, the lookup
-dialog populating, a provider error surfacing visibly).
+Drives a real headless Chromium against the running frozen product to prove each
+declared screen actually RENDERS in the DOM — the layer the HTTP checks in
+frozen_verify.py cannot see (rendered templates, JS-driven elements, markers
+that only exist once the page is live).
 
-Checks (against an already-running server at *base*):
-  1. log in through the browser (clearing the forced first-run password change)
-  2. EyeRate admin → the real "Financial Data Provider" form is visible, the
-     stale "coming soon" text is NOT
-  3. Securities → New → Lookup → type VOO → the dialog CALLS the endpoint and
-     POPULATES results; selecting one fills the symbol field
-  4. a forced provider failure surfaces a VISIBLE error in the dialog (Task-4),
-     not a silent empty list
+This tier is MANIFEST-DRIVEN and GENERIC: the screens it visits, the steps it
+runs, and the markers it asserts all come from the assembled ``*_screens.json``
+data (see scripts/screen_manifest.py). No component name, route, or marker is
+hardcoded here. Driving a screen = run its declared steps, then assert its
+markers are present in the live DOM. A stale/wrong render (e.g. the historical
+"coming soon" eyerate stub) fails because NONE of the real markers are found.
 
-Raises RuntimeError (which the caller turns into a build failure) on any failure.
-Importable: frozen_verify.run_tier_b() calls run_browser_checks().
+Step verbs (schema from manomatika/matika#84): navigate, fill, click, wait_for,
+assert_present, assert_absent, assert_value.
+
+Raises BrowserCheckError (which the caller turns into a build failure) on any
+failure. Importable: frozen_verify.run_tier_b() calls run_browser_checks().
 """
 
 from __future__ import annotations
 
-import contextlib
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import screen_manifest  # noqa: E402  (local sibling module)
+
+# How long to wait for a marker / element before deciding it is absent.
+_MARKER_TIMEOUT_MS = 8_000
 
 
 class BrowserCheckError(RuntimeError):
@@ -70,109 +78,109 @@ def _login(page, base, admin_email, admin_password, new_password) -> None:
         )
 
 
-def _check_admin_form(page, base) -> None:
-    page.goto(f"{base}/eyerate/admin", wait_until="domcontentloaded")
-    body = page.inner_text("body")
-    if "Financial Data Provider" not in body:
-        raise BrowserCheckError(
-            "EyeRate admin DOM is missing the 'Financial Data Provider' form. "
-            f"Body head:\n{body[:500]}"
-        )
-    if "coming soon" in body.lower():
-        raise BrowserCheckError(
-            "EyeRate admin DOM still shows stale 'coming soon'. "
-            f"Body head:\n{body[:500]}"
-        )
-    print("    ✓ [browser] admin form visible, no 'coming soon'")
+class BrowserScreenExecutor(screen_manifest.ScreenExecutor):
+    """Tier-(b) executor: drives a declared screen through the live DOM.
+
+    Implements every schema verb against Playwright. ``assert_markers`` proves
+    the screen RENDERED: a screen is considered present if AT LEAST ONE of its
+    declared markers is found in the DOM — they read as defensive alternative
+    selectors for the same screen (e.g. an id OR an ``action=`` form selector),
+    and a wholly-wrong render matches none of them. (This any-present semantics
+    is the gate MECHANISM A1 defines; the schema canon in matika#84 only requires
+    that ``markers`` be present, leaving verification semantics to the gate.)
+    """
+
+    def __init__(self, page, base: str):
+        self.page = page
+        self.base = base
+        self._route = "(none navigated)"
+        from playwright.sync_api import TimeoutError as _PWTimeout
+        self._timeout_error = _PWTimeout
+
+    def run_step(self, step: screen_manifest.Step) -> None:
+        verb, target, value = step.verb, step.target, step.value
+        if verb == "navigate":
+            self._route = target
+            self.page.goto(self.base + (target or ""), wait_until="domcontentloaded")
+        elif verb == "fill":
+            self.page.fill(target, value or "")
+        elif verb == "click":
+            self.page.click(target)
+        elif verb == "wait_for":
+            self.page.wait_for_selector(target, state="visible",
+                                        timeout=_MARKER_TIMEOUT_MS)
+        elif verb == "assert_present":
+            self._assert_present(target)
+        elif verb == "assert_absent":
+            self._assert_absent(target)
+        elif verb == "assert_value":
+            self._assert_value(target, value)
+        else:  # pragma: no cover - loader already rejects unknown verbs
+            raise BrowserCheckError(f"unknown verb {verb!r} on {self._route}")
+
+    def _assert_present(self, selector: str) -> None:
+        try:
+            self.page.wait_for_selector(selector, state="visible",
+                                        timeout=_MARKER_TIMEOUT_MS)
+        except self._timeout_error:
+            raise BrowserCheckError(
+                f"assert_present failed on {self._route}: selector {selector!r} "
+                f"not visible"
+            )
+        print(f"      · [browser] assert_present {selector!r} OK")
+
+    def _assert_absent(self, selector: str) -> None:
+        if self.page.query_selector(selector) is not None:
+            raise BrowserCheckError(
+                f"assert_absent failed on {self._route}: selector {selector!r} "
+                f"is present but should be absent"
+            )
+        print(f"      · [browser] assert_absent {selector!r} OK")
+
+    def _assert_value(self, selector: str, expected) -> None:
+        try:
+            self.page.wait_for_selector(selector, state="attached",
+                                        timeout=_MARKER_TIMEOUT_MS)
+            actual = self.page.input_value(selector)
+        except self._timeout_error:
+            raise BrowserCheckError(
+                f"assert_value failed on {self._route}: selector {selector!r} "
+                f"not found"
+            )
+        if (expected or "").upper() not in (actual or "").upper():
+            raise BrowserCheckError(
+                f"assert_value failed on {self._route}: selector {selector!r} "
+                f"value {actual!r} does not contain expected {expected!r}"
+            )
+        print(f"      · [browser] assert_value {selector!r} contains {expected!r} OK")
+
+    def assert_markers(self, markers) -> None:
+        found = None
+        for marker in markers:
+            try:
+                self.page.wait_for_selector(marker, state="attached",
+                                            timeout=_MARKER_TIMEOUT_MS)
+                found = marker
+                break
+            except self._timeout_error:
+                continue
+        if found is None:
+            body = ""
+            try:
+                body = self.page.inner_text("body")[:500]
+            except Exception:  # noqa: BLE001 - best-effort context for the failure
+                pass
+            raise BrowserCheckError(
+                f"screen at {self._route}: NONE of the declared markers "
+                f"{list(markers)} were found in the DOM — the page may be a "
+                f"stale/wrong render. Body head:\n{body}"
+            )
+        print(f"      · [browser] marker present: {found!r}")
 
 
-def _open_lookup(page, base) -> None:
-    page.goto(f"{base}/eyerate/securities", wait_until="domcontentloaded")
-    # Enter "new" mode so the edit panel (and its Lookup button) is shown.
-    page.click("#btn-new")
-    # The .btn-lookup button is hidden until edit mode; wait for it to show.
-    page.wait_for_selector(".btn-lookup", state="visible", timeout=10_000)
-    page.click(".btn-lookup")
-    page.wait_for_selector("#lookup-modal", state="visible", timeout=10_000)
-
-
-def _search_in_dialog(page, query) -> None:
-    page.fill("#lookup-search-input", query)
-    page.click("#btn-lookup-search")
-
-
-def _check_lookup_populates_and_fills(page, base) -> None:
-    _open_lookup(page, base)
-    _search_in_dialog(page, "VOO")
-    # Wait for at least one real result row to appear in the results body.
-    page.wait_for_function(
-        """() => {
-            const tb = document.querySelector('#lookup-results-list');
-            if (!tb) return false;
-            const rows = tb.querySelectorAll('tr');
-            if (rows.length === 0) return false;
-            // Exclude the 'Error:' / 'no results' placeholder rows.
-            const txt = tb.innerText.toLowerCase();
-            return !txt.includes('error:') && txt.includes('voo');
-        }""",
-        timeout=30_000,
-    )
-    print("    ✓ [browser] lookup dialog populated real VOO results")
-
-    # Select the first result row (single-select), enabling OK, then confirm.
-    row = page.query_selector("#lookup-results-list tr")
-    if row is None:
-        raise BrowserCheckError("no result row to select in lookup dialog")
-    checkbox = row.query_selector(".row-check")
-    (checkbox or row).click()
-    page.wait_for_selector("#btn-ok-lookup:not([disabled])", timeout=10_000)
-    page.click("#btn-ok-lookup")
-    # The selection must populate the symbol field via /securities/lookup.
-    page.wait_for_function(
-        """() => {
-            const f = document.querySelector('#field-symbol');
-            return f && f.value && f.value.toUpperCase().includes('VOO');
-        }""",
-        timeout=30_000,
-    )
-    print("    ✓ [browser] selecting a result filled #field-symbol with VOO")
-
-
-def _set_provider_finnhub_no_key(page, base) -> None:
-    page.goto(f"{base}/eyerate/admin", wait_until="domcontentloaded")
-    page.check('input[name="endpoint"][value="finnhub"]')
-    with contextlib.suppress(Exception):
-        page.fill('input[name="api_key"]', "")
-    with page.expect_navigation(wait_until="domcontentloaded"):
-        page.click('button[type="submit"], input[type="submit"]')
-
-
-def _set_provider_yahoo(page, base) -> None:
-    page.goto(f"{base}/eyerate/admin", wait_until="domcontentloaded")
-    with contextlib.suppress(Exception):
-        page.check('input[name="endpoint"][value="yahoo"]')
-        with page.expect_navigation(wait_until="domcontentloaded"):
-            page.click('button[type="submit"], input[type="submit"]')
-
-
-def _check_provider_error_visible(page, base) -> None:
-    _set_provider_finnhub_no_key(page, base)
-    try:
-        _open_lookup(page, base)
-        _search_in_dialog(page, "VOO")
-        page.wait_for_function(
-            """() => {
-                const tb = document.querySelector('#lookup-results-list');
-                return tb && tb.innerText.toLowerCase().includes('error:');
-            }""",
-            timeout=30_000,
-        )
-        print("    ✓ [browser] forced provider failure shows a VISIBLE error in the dialog")
-    finally:
-        _set_provider_yahoo(page, base)
-
-
-def run_browser_checks(base, admin_email, admin_password, new_password) -> None:
+def run_browser_checks(base, manifest, admin_email, admin_password,
+                       new_password) -> None:
+    """Drive every declared screen in the manifest through the live DOM."""
     sync_playwright = _import_playwright()
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -181,9 +189,11 @@ def run_browser_checks(base, admin_email, admin_password, new_password) -> None:
             page = context.new_page()
             page.set_default_timeout(30_000)
             _login(page, base, admin_email, admin_password, new_password)
-            _check_admin_form(page, base)
-            _check_lookup_populates_and_fills(page, base)
-            _check_provider_error_visible(page, base)
+            executor = BrowserScreenExecutor(page, base)
+            for screen in manifest.screens:
+                print(f"    · [{screen.source}] {screen.screen_id} -> {screen.route}")
+                screen_manifest.drive_screen(screen, executor)
+            print(f"    [browser] drove {len(manifest.screens)} declared screen(s)")
         finally:
             browser.close()
 
@@ -192,9 +202,13 @@ if __name__ == "__main__":  # pragma: no cover - manual local use
     import argparse
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base", default="http://127.0.0.1:8000")
+    ap.add_argument("--source-root", required=True,
+                    help="root of the pinned source clones holding *_screens.json")
     ap.add_argument("--admin-email", default="admin@matika.local")
     ap.add_argument("--admin-password", default="adminpassword")
     ap.add_argument("--new-password", default="Verify-Pass-123")
     a = ap.parse_args()
-    run_browser_checks(a.base, a.admin_email, a.admin_password, a.new_password)
+    manifest = screen_manifest.load_screen_manifest(a.source_root)
+    run_browser_checks(a.base, manifest, a.admin_email, a.admin_password,
+                       a.new_password)
     print("browser checks: PASS")
