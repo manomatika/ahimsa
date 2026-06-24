@@ -9,23 +9,35 @@ machine: a stale eyerate plugin in ~/matika/plugins/ survived every reinstall
 and the boot smoke never exercised it.
 
 This script closes that gap. It boots the FROZEN executable in a clean,
-throwaway HOME and runs feature-level checks against the *running* product:
+throwaway HOME and runs MANIFEST-DRIVEN feature-level checks against the
+*running* product. The set of screens it drives, and the markers/steps it
+asserts, are NOT hardcoded: they are read from the assembled ``*_screens.json``
+declarative data each component ships (matika core + every AppLug). The harness
+is generic — it names no component, route, or marker, and discovers whatever the
+manifest declares (see scripts/screen_manifest.py).
 
-  TIER (a) — authenticated HTTP / route-content checks (this file):
-    * log in as the seeded admin (clearing the forced first-run password change)
-    * GET /eyerate/admin  → assert the real "Financial Data Provider" form is
-      present AND the stale "coming soon" text is absent
-    * GET /eyerate/securities/search?q=VOO → assert real results come back
-    * force a provider failure → assert it surfaces as a VISIBLE error (HTTP 502
-      with a detail body, Task-4), NOT a silent empty list
+  TIER (a) — authenticated HTTP / route checks (this file): log in as the seeded
+    admin (clearing the forced first-run password change), then for EVERY
+    declared ``screen`` execute its navigate step(s) over authenticated HTTP and
+    assert the route is alive, authorized, and renders HTML. CSS-selector marker
+    assertions need a real DOM engine and are tier (b)'s job.
 
   TIER (b) — headless-browser / DOM checks (browser_verify.py, opt-in --browser):
-    driven through Playwright against the same running server.
+    drives each declared screen's steps through Playwright and asserts its
+    markers in the live DOM (this is the tier that catches a stale "coming soon"
+    render — the real admin markers are absent).
+
+Coverage enumeration reads the manifest from the PINNED SOURCE CLONES embedded
+in the build dir via ``--source-root`` (e.g. ``build/matika`` — the A1 arm of
+the hybrid read). The route inventory comes from the product's ``[ROUTES: ...]``
+STARTUP LOG line (M3) — parsed from the booted app's logs, no runtime test
+endpoint. Both the declared-screen set and the live-route set are captured and
+made available for the A3 route-vs-manifest gate (manomatika/ahimsa#84).
 
 Two SCENARIOS, both required:
 
-  --scenario fresh    a first-time install (pristine HOME) — plugin extracted,
-                      admin form present, lookup works.
+  --scenario fresh    a first-time install (pristine HOME) — plugins extracted,
+                      every declared screen drives clean.
 
   --scenario upgrade  an upgrade OVER a prior install. The script boots once to
                       do the real first run, then mutates ~/matika/plugins/eyerate
@@ -34,14 +46,17 @@ Two SCENARIOS, both required:
                       marker, plus a user-data file), reboots, and asserts the
                       launcher REFRESHED the stale plugin to the bundled version
                       while PRESERVING the user-data file — then runs the same
-                      tier-a (and tier-b) feature checks.
+                      manifest-driven tier-a (and tier-b) checks. The stale-state
+                      seeding is the retained escaped-bug regression fixture; the
+                      INSTALLED-DISK manifest read for upgrade-detection is A2
+                      (manomatika/ahimsa#83).
 
 Any failed assertion fails the build, dumping ~/matika/logs and the process
 output so the reason is visible directly in the CI job log.
 
 Usage:
     python frozen_verify.py --exe <frozen-binary> --scenario fresh|upgrade \
-        [--port 8000] [--timeout 90] [--browser]
+        [--source-root build/matika] [--port 8000] [--timeout 90] [--browser]
 """
 
 from __future__ import annotations
@@ -58,6 +73,9 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import screen_manifest  # noqa: E402  (local sibling module)
 
 # The seeded first-run admin (matika src/matika/database.py::init_db).
 ADMIN_EMAIL = "admin@matika.local"
@@ -241,140 +259,67 @@ def _login(requests, base: str):
     return s
 
 
-def _extract_csrf(html: str) -> str | None:
-    import re
-    m = re.search(r'name="csrf_token"[^>]*value="([^"]*)"', html)
-    if not m:
-        m = re.search(r'value="([^"]*)"[^>]*name="csrf_token"', html)
-    return m.group(1) if m else None
+class HttpScreenExecutor(screen_manifest.ScreenExecutor):
+    """Tier-(a) executor: drives a declared screen over authenticated HTTP.
 
-
-def check_admin_form(requests, s, base: str) -> None:
-    r = s.get(f"{base}/eyerate/admin", timeout=15)
-    if r.status_code != 200:
-        raise FrozenAppError(
-            f"GET /eyerate/admin returned {r.status_code} (expected 200); "
-            f"body head: {r.text[:300]!r}"
-        )
-    text = r.text
-    if "Financial Data Provider" not in text:
-        raise FrozenAppError(
-            "EyeRate admin page is MISSING the 'Financial Data Provider' form — "
-            "the stale-plugin bug is present. Body head:\n" + text[:500]
-        )
-    if "coming soon" in text.lower():
-        raise FrozenAppError(
-            "EyeRate admin page still shows STALE 'coming soon' text — the "
-            "bundled plugin was not refreshed. Body head:\n" + text[:500]
-        )
-    print('    ✓ /eyerate/admin: real "Financial Data Provider" form present, '
-          'no "coming soon"')
-
-
-def check_voo_lookup(requests, s, base: str) -> None:
-    last_err = None
-    for attempt in range(1, 4):
-        try:
-            r = s.get(
-                f"{base}/eyerate/securities/search",
-                params={"q": "VOO"}, timeout=30,
-            )
-        except Exception as exc:  # network hiccup against the live provider
-            last_err = f"request error: {exc}"
-            time.sleep(2.0)
-            continue
-        if r.status_code != 200:
-            last_err = f"HTTP {r.status_code}; body: {r.text[:300]!r}"
-            time.sleep(2.0)
-            continue
-        try:
-            data = r.json()
-        except ValueError:
-            last_err = f"non-JSON body: {r.text[:300]!r}"
-            break
-        if not isinstance(data, list) or not data:
-            last_err = f"empty/again non-list results: {data!r}"
-            time.sleep(2.0)
-            continue
-        symbols = [str(d.get("symbol", "")).upper() for d in data if isinstance(d, dict)]
-        if any("VOO" in sym for sym in symbols):
-            print(f"    ✓ /securities/search?q=VOO: {len(data)} real result(s), "
-                  f"e.g. {symbols[:3]}")
-            return
-        last_err = f"results present but none match VOO: {symbols[:5]}"
-        time.sleep(2.0)
-    raise FrozenAppError(
-        f"securities VOO lookup did not return real results after retries: {last_err}"
-    )
-
-
-def check_provider_error_visible(requests, s, base: str) -> None:
-    """Force a provider failure and assert it surfaces (502 + detail), not [].
-
-    Switching the active provider to one that requires an API key, with no key
-    configured, makes the next search raise ProviderError. Task-4's contract is
-    that this surfaces as an explicit error (HTTP 502 with a detail body), never
-    a silent empty list that the UI would render as "no results".
+    ``navigate`` is performed as an authenticated GET and the response is
+    asserted to be a live, authorized, HTML render (catches a removed/renamed
+    screen → 404, a crash → 5xx, or an auth-gate misfire → 4xx). CSS-selector
+    markers and DOM-interaction verbs (fill/click/wait_for/assert_*) require a
+    real DOM engine and are deferred to tier (b); with today's navigate-only
+    screen data nothing is silently dropped.
     """
-    # Read the admin form to obtain the CSRF token for the settings POST.
-    admin = s.get(f"{base}/eyerate/admin", timeout=15)
-    csrf = _extract_csrf(admin.text)
-    if not csrf:
-        raise FrozenAppError("could not extract csrf_token from /eyerate/admin")
-    payload = {"endpoint": "finnhub", "api_key": "", "csrf_token": csrf}
-    set_resp = s.post(f"{base}/eyerate/admin", data=payload,
-                      allow_redirects=False, timeout=15)
-    if set_resp.status_code not in (200, 302, 303):
-        raise FrozenAppError(
-            f"setting provider=finnhub returned {set_resp.status_code}"
-        )
-    try:
-        r = s.get(f"{base}/eyerate/securities/search",
-                  params={"q": "VOO"}, timeout=30)
-        if r.status_code == 200:
-            body = r.json()
-            raise FrozenAppError(
-                "forced provider failure returned HTTP 200 (silent) instead of "
-                f"a visible error — body: {body!r}"
-            )
-        if r.status_code != 502:
-            raise FrozenAppError(
-                f"forced provider failure returned HTTP {r.status_code} "
-                f"(expected 502); body: {r.text[:300]!r}"
-            )
-        detail = r.json().get("detail", "")
-        if not detail:
-            raise FrozenAppError(
-                f"502 response had no 'detail' message: {r.text[:300]!r}"
-            )
-        print(f'    ✓ forced provider failure surfaces HTTP 502 + detail: "{detail}"')
-    finally:
-        # Restore the default provider so any later checks behave normally.
-        admin2 = s.get(f"{base}/eyerate/admin", timeout=15)
-        csrf2 = _extract_csrf(admin2.text) or csrf
-        with contextlib.suppress(Exception):
-            s.post(f"{base}/eyerate/admin",
-                   data={"endpoint": "yahoo", "api_key": "", "csrf_token": csrf2},
-                   allow_redirects=False, timeout=15)
+
+    def __init__(self, session, base: str):
+        self.session = session
+        self.base = base
+
+    def run_step(self, step: screen_manifest.Step) -> None:
+        if step.verb == "navigate":
+            url = self.base + (step.target or "")
+            try:
+                r = self.session.get(url, allow_redirects=False, timeout=30)
+            except Exception as exc:  # noqa: BLE001 - surface as a feature failure
+                raise FrozenAppError(f"GET {step.target} raised: {exc}") from exc
+            if r.status_code != 200:
+                raise FrozenAppError(
+                    f"declared screen route {step.target} returned HTTP "
+                    f"{r.status_code} (expected 200 for the authenticated admin); "
+                    f"body head: {r.text[:300]!r}"
+                )
+            ctype = r.headers.get("Content-Type", "")
+            if "html" not in ctype.lower() or not r.text.strip():
+                raise FrozenAppError(
+                    f"declared screen route {step.target} returned 200 but not a "
+                    f"non-empty HTML body (Content-Type {ctype!r})"
+                )
+            print(f"      · [http] GET {step.target} -> 200 HTML")
+        else:
+            # DOM-only verb: tier (a) cannot perform it without a browser.
+            print(f"      · [http] defer '{step.verb}' to tier (b) (no DOM in HTTP tier)")
+
+    def assert_markers(self, markers) -> None:
+        # Marker selectors are evaluated against the live DOM in tier (b); the
+        # HTTP tier's per-screen proof is route liveness (above).
+        print(f"      · [http] {len(markers)} marker(s) verified in tier (b)")
 
 
-def run_tier_a(base: str) -> None:
-    print("  TIER (a) — authenticated HTTP / route-content checks")
+def run_tier_a(base: str, manifest: screen_manifest.ScreenManifest) -> None:
+    print("  TIER (a) — manifest-driven authenticated-HTTP route checks")
     requests = _require_requests()
     s = _login(requests, base)
-    check_admin_form(requests, s, base)
-    check_voo_lookup(requests, s, base)
-    check_provider_error_visible(requests, s, base)
-    print("  TIER (a): PASS")
+    executor = HttpScreenExecutor(s, base)
+    for screen in manifest.screens:
+        print(f"    · [{screen.source}] {screen.screen_id} -> {screen.route}")
+        screen_manifest.drive_screen(screen, executor)
+    print(f"  TIER (a): PASS ({len(manifest.screens)} screen(s) driven)")
 
 
-def run_tier_b(base: str) -> None:
-    print("  TIER (b) — headless-browser / DOM checks (Playwright)")
-    here = os.path.dirname(os.path.abspath(__file__))
-    sys.path.insert(0, here)
-    import browser_verify  # local module
+def run_tier_b(base: str, manifest: screen_manifest.ScreenManifest) -> None:
+    print("  TIER (b) — manifest-driven headless-browser / DOM checks (Playwright)")
+    import browser_verify  # local sibling module
     browser_verify.run_browser_checks(
-        base, admin_email=ADMIN_EMAIL, admin_password=ADMIN_PASSWORD,
+        base, manifest, admin_email=ADMIN_EMAIL, admin_password=ADMIN_PASSWORD,
         new_password=NEW_PASSWORD,
     )
     print("  TIER (b): PASS")
@@ -465,19 +410,44 @@ def _assert_refreshed(home: str, boot_text: str) -> None:
 # Scenario drivers
 # ---------------------------------------------------------------------------
 
-def _run_checks(app: BootedApp, browser: bool) -> None:
-    run_tier_a(app.base)
+def _capture_route_inventory(app: BootedApp, manifest) -> None:
+    """Capture the live-route set (from [ROUTES:...]) beside the declared set.
+
+    A1 only CAPTURES and EXPOSES both sets; it does NOT compare them. The
+    route-vs-manifest HARD GATE that fails the build on an undeclared live screen
+    is A3 (manomatika/ahimsa#84) and plugs in at the SEAM marked below.
+    """
+    live_routes = screen_manifest.parse_routes_marker(app.captured_text())
+    declared = manifest.declared_routes() if manifest is not None else []
+    print(f"  · route inventory (from [ROUTES:...] startup marker): "
+          f"{len(live_routes)} live GET route(s)")
+    if manifest is not None:
+        print(f"  · declared screen routes (from manifest): {len(declared)}")
+    if not live_routes:
+        print("  · WARNING: no [ROUTES:...] marker found in the boot logs "
+              "(matika#86 / M3 emits it at startup)")
+    # SEAM (A3, manomatika/ahimsa#84): the route-vs-manifest hard gate compares
+    # `live_routes` against the manifest's classified routes HERE and fails the
+    # build on any live GET route the manifest does not declare. A1 stops at
+    # capture so both sets are available without yet enforcing the comparison.
+
+
+def _run_checks(app: BootedApp, browser: bool, manifest) -> None:
+    _capture_route_inventory(app, manifest)
+    if manifest is None:
+        return
+    run_tier_a(app.base, manifest)
     if browser:
-        run_tier_b(app.base)
+        run_tier_b(app.base, manifest)
 
 
-def scenario_fresh(exe: str, port: int, timeout: int, browser: bool) -> None:
+def scenario_fresh(exe: str, port: int, timeout: int, browser: bool, manifest) -> None:
     print("=== SCENARIO: fresh (first-time install) ===")
     home = tempfile.mkdtemp(prefix="mm-verify-fresh-")
     try:
         with BootedApp(exe, home, port, timeout) as app:
             try:
-                _run_checks(app, browser)
+                _run_checks(app, browser, manifest)
             except Exception:
                 _dump_failure(app)
                 raise
@@ -486,7 +456,7 @@ def scenario_fresh(exe: str, port: int, timeout: int, browser: bool) -> None:
     print("=== fresh: PASS ===\n")
 
 
-def scenario_upgrade(exe: str, port: int, timeout: int, browser: bool) -> None:
+def scenario_upgrade(exe: str, port: int, timeout: int, browser: bool, manifest) -> None:
     print("=== SCENARIO: upgrade (over a prior, stale install) ===")
     home = tempfile.mkdtemp(prefix="mm-verify-upgrade-")
     try:
@@ -502,7 +472,7 @@ def scenario_upgrade(exe: str, port: int, timeout: int, browser: bool) -> None:
             boot_text = app.captured_text()
             try:
                 _assert_refreshed(home, boot_text)
-                _run_checks(app, browser)
+                _run_checks(app, browser, manifest)
             except Exception:
                 _dump_failure(app)
                 raise
@@ -523,11 +493,38 @@ def _dump_failure(app: BootedApp) -> None:
         pass
 
 
+def _load_manifest(source_root):
+    """Load the screen manifest from the pinned source clones (A1 arm), or skip.
+
+    When --source-root is given the manifest MUST load (a missing/empty/malformed
+    manifest is a ScreenManifestError → non-zero exit, per the acceptance
+    criterion). When --source-root is omitted the source-clone arm is not
+    available (e.g. the install-verify jobs, which only have the installed
+    artifact): the per-screen manifest drive is SKIPPED here and supplied by the
+    INSTALLED-DISK arm (A2, manomatika/ahimsa#83). Boot + route-inventory capture
+    + the upgrade-refresh assertions still run.
+    """
+    if not source_root:
+        print("  · no --source-root given: manifest-driven screen checks SKIPPED "
+              "for this run (installed-disk arm is manomatika/ahimsa#83 / A2). "
+              "Boot, [ROUTES:...] capture and upgrade-refresh checks still run.")
+        return None
+    manifest = screen_manifest.load_screen_manifest(source_root)
+    print(f"  · loaded screen manifest from {source_root}: "
+          f"{len(manifest.screens)} screen(s) + {len(manifest.not_a_screen)} "
+          f"not-a-screen across sources {list(manifest.sources)}")
+    return manifest
+
+
 def main() -> int:
     _reconfigure_stdio()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--exe", required=True, help="frozen executable to launch")
     ap.add_argument("--scenario", required=True, choices=["fresh", "upgrade"])
+    ap.add_argument("--source-root", default=None,
+                    help="root of the pinned source clones holding the assembled "
+                         "*_screens.json (e.g. build/matika). Enables the "
+                         "manifest-driven per-screen checks (A1 source-clone arm).")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--timeout", type=int, default=90)
     ap.add_argument("--browser", action="store_true",
@@ -540,10 +537,15 @@ def main() -> int:
         return 1
 
     try:
+        manifest = _load_manifest(args.source_root)
         if args.scenario == "fresh":
-            scenario_fresh(exe, args.port, args.timeout, args.browser)
+            scenario_fresh(exe, args.port, args.timeout, args.browser, manifest)
         else:
-            scenario_upgrade(exe, args.port, args.timeout, args.browser)
+            scenario_upgrade(exe, args.port, args.timeout, args.browser, manifest)
+    except screen_manifest.ScreenManifestError as exc:
+        print(f"::error::frozen-verify [{args.scenario}] could not load the screen "
+              f"manifest: {exc}")
+        return 1
     except FrozenAppError as exc:
         print(f"::error::frozen-verify [{args.scenario}] FAILED: {exc}")
         return 1

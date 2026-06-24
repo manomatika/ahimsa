@@ -13,11 +13,17 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).parent.parent / "scripts" / "frozen_verify.py"
+_SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
+_SCRIPT = _SCRIPTS_DIR / "frozen_verify.py"
+# scripts/ holds standalone sibling modules (screen_manifest, browser_verify) the
+# verify harness imports by name; make them importable in the test process too.
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 
 
 @pytest.fixture(scope="module")
@@ -39,12 +45,6 @@ def _make_fresh_eyerate(home: Path) -> Path:
         json.dumps({"version": "0.0.4", "code_fingerprint": "abc", "files": []})
     )
     return plugin
-
-
-def test_extract_csrf_both_attr_orders(fv):
-    assert fv._extract_csrf('<input name="csrf_token" value="Tok123">') == "Tok123"
-    assert fv._extract_csrf('<input value="ZZZ" name="csrf_token">') == "ZZZ"
-    assert fv._extract_csrf("<input name='other' value='x'>") is None
 
 
 def test_seed_stale_eyerate_makes_it_look_pre_fix(fv, tmp_path):
@@ -183,3 +183,110 @@ def test_installed_path_override_uses_same_code_path_as_freeze_dir(fv, tmp_path)
     # _assert_refreshed also operates on HOME, not exe path — passes for any exe.
     _ = installed_exe  # exe path is irrelevant to the assertion
     fv._assert_refreshed(str(tmp_path), boot_log)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Manifest-driven tier-(a) harness (manomatika/ahimsa#82, A1)
+#
+# These pin that the HTTP tier drives EXACTLY the screens the manifest declares,
+# generically, asserting route liveness per declared screen — and that it never
+# hardcodes a route. Before this change there was no manifest drive at all, so a
+# test asserting the manifest is enumerated and driven would fail (no such code).
+# ---------------------------------------------------------------------------
+
+import screen_manifest  # noqa: E402  (sibling script, added to sys.path below)
+
+
+class _FakeResponse:
+    def __init__(self, status_code=200, text="<html><body>ok</body></html>",
+                 content_type="text/html; charset=utf-8"):
+        self.status_code = status_code
+        self.text = text
+        self.headers = {"Content-Type": content_type}
+
+
+class _FakeSession:
+    """Records every GET so a test can assert exactly which routes were driven."""
+
+    def __init__(self, responder=None):
+        self.gets = []
+        self._responder = responder or (lambda url: _FakeResponse())
+
+    def get(self, url, allow_redirects=True, timeout=None):
+        self.gets.append(url)
+        return self._responder(url)
+
+
+def _screen(fv_unused, screen_id="s1", route="/r1", markers=("#m1",),
+            steps=(("navigate", "/r1", None),), source="core"):
+    return screen_manifest.Screen(
+        screen_id=screen_id, route=route, markers=tuple(markers),
+        steps=tuple(screen_manifest.Step(v, t, val) for (v, t, val) in steps),
+        source=source,
+    )
+
+
+def test_http_executor_navigate_asserts_route_liveness(fv):
+    sess = _FakeSession()
+    ex = fv.HttpScreenExecutor(sess, "http://x")
+    ex.run_step(screen_manifest.Step("navigate", "/about", None))
+    assert sess.gets == ["http://x/about"]
+
+
+def test_http_executor_navigate_rejects_non_200(fv):
+    sess = _FakeSession(lambda url: _FakeResponse(status_code=404, text="nope"))
+    ex = fv.HttpScreenExecutor(sess, "http://x")
+    with pytest.raises(fv.FrozenAppError):
+        ex.run_step(screen_manifest.Step("navigate", "/gone", None))
+
+
+def test_http_executor_navigate_rejects_non_html_200(fv):
+    sess = _FakeSession(lambda url: _FakeResponse(content_type="application/json"))
+    ex = fv.HttpScreenExecutor(sess, "http://x")
+    with pytest.raises(fv.FrozenAppError):
+        ex.run_step(screen_manifest.Step("navigate", "/api", None))
+
+
+def test_run_tier_a_drives_exactly_the_declared_screens(fv, monkeypatch):
+    """Tier (a) hits each declared screen's route once — generic, no hardcoding."""
+    sess = _FakeSession()
+    monkeypatch.setattr(fv, "_require_requests", lambda: None)
+    monkeypatch.setattr(fv, "_login", lambda requests, base: sess)
+    manifest = screen_manifest.ScreenManifest(
+        screens=(
+            _screen(fv, "alpha:home", "/alpha", ("#a",),
+                    (("navigate", "/alpha", None),), source="alpha"),
+            _screen(fv, "beta:home", "/beta", ("#b",),
+                    (("navigate", "/beta", None),), source="beta"),
+        ),
+        not_a_screen=(),
+        sources=("alpha", "beta"),
+    )
+    fv.run_tier_a("http://x", manifest)
+    assert sess.gets == ["http://x/alpha", "http://x/beta"]
+
+
+def test_load_manifest_skips_without_source_root(fv, capsys):
+    """No --source-root -> manifest drive skipped (A2 installed-disk arm), not a crash."""
+    assert fv._load_manifest(None) is None
+    out = capsys.readouterr().out
+    assert "SKIPPED" in out and "ahimsa#83" in out
+
+
+def test_load_manifest_raises_on_missing_root(fv, tmp_path):
+    with pytest.raises(screen_manifest.ScreenManifestError):
+        fv._load_manifest(str(tmp_path / "does-not-exist"))
+
+
+def test_capture_route_inventory_parses_routes_marker(fv, capsys):
+    """The [ROUTES:...] startup line is parsed and reported (A3 consumes it later)."""
+
+    class _App:
+        def captured_text(self):
+            return "boot...\n[ROUTES: /, /about, /eyerate/admin]\nmore"
+
+    manifest = screen_manifest.ScreenManifest(
+        screens=(_screen(fv, "home", "/", ("#m",)),), not_a_screen=(), sources=("core",))
+    fv._capture_route_inventory(_App(), manifest)
+    out = capsys.readouterr().out
+    assert "3 live GET route(s)" in out
