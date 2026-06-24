@@ -201,11 +201,11 @@ jobs:
           # never installed before PyInstaller froze the bundle. PyInstaller can
           # only collect packages importable in THIS environment, so alembic /
           # fastapi / uvicorn / sqlalchemy were silently omitted and the app
-          # died at the first third-party import. Install the cloned matika's
-          # pinned deps here, BEFORE the freeze. Use requirements.txt (NOT
-          # `pip install -e .`) to avoid the pyproject requires-python>=3.14 gate
-          # (CI runs Python 3.11).
-          pip install -r requirements.txt
+          # died at the first third-party import. Extract deps from pyproject.toml
+          # and install them individually (NOT `pip install -e .`) to bypass the
+          # requires-python>=3.14 gate — CI runs Python 3.11, but the individual
+          # packages are all 3.11-compatible. tomllib is stdlib from Python 3.11+.
+          python3 -c "import tomllib,subprocess,sys; d=tomllib.load(open('pyproject.toml','rb')); subprocess.run([sys.executable,'-m','pip','install']+d['project']['dependencies'],check=True)"
 
       - name: Install AppLug runtime dependencies
         shell: bash
@@ -216,8 +216,14 @@ jobs:
           # importable and collected by collect_all() in matika.spec. Without
           # this step, eyerate's symbol lookup/search silently returns empty
           # in the frozen app because curl_cffi/yfinance are not bundled.
-          for req in plugins/*/requirements.txt; do
-            [ -f "$req" ] && pip install -r "$req"
+          # Prefer pyproject.toml; fall back to requirements.txt for older
+          # pinned applug tags that pre-date pyproject.toml adoption.
+          for plug_dir in plugins/*/; do
+            if [ -f "${plug_dir}pyproject.toml" ]; then
+              PLUG_PY="${plug_dir}pyproject.toml" python3 -c "import tomllib,subprocess,sys,os; d=tomllib.load(open(os.environ['PLUG_PY'],'rb')); deps=d.get('project',{}).get('dependencies',[]); subprocess.run([sys.executable,'-m','pip','install']+deps,check=True) if deps else None"
+            elif [ -f "${plug_dir}requirements.txt" ]; then
+              pip install -r "${plug_dir}requirements.txt"
+            fi
           done
 
       - name: Run PyInstaller (freeze the product bundle)
@@ -488,11 +494,11 @@ jobs:
           # never installed before PyInstaller froze the bundle. PyInstaller can
           # only collect packages importable in THIS environment, so alembic /
           # fastapi / uvicorn / sqlalchemy were silently omitted and the app
-          # died at the first third-party import. Install the cloned matika's
-          # pinned deps here, BEFORE the freeze. Use requirements.txt (NOT
-          # `pip install -e .`) to avoid the pyproject requires-python>=3.14 gate
-          # (CI runs Python 3.11).
-          pip install -r requirements.txt
+          # died at the first third-party import. Extract deps from pyproject.toml
+          # and install them individually (NOT `pip install -e .`) to bypass the
+          # requires-python>=3.14 gate — CI runs Python 3.11, but the individual
+          # packages are all 3.11-compatible. tomllib is stdlib from Python 3.11+.
+          python3 -c "import tomllib,subprocess,sys; d=tomllib.load(open('pyproject.toml','rb')); subprocess.run([sys.executable,'-m','pip','install']+d['project']['dependencies'],check=True)"
 
       - name: Install AppLug runtime dependencies
         shell: bash
@@ -503,8 +509,14 @@ jobs:
           # importable and collected by collect_all() in matika.spec. Without
           # this step, eyerate's symbol lookup/search silently returns empty
           # in the frozen app because curl_cffi/yfinance are not bundled.
-          for req in plugins/*/requirements.txt; do
-            [ -f "$req" ] && pip install -r "$req"
+          # Prefer pyproject.toml; fall back to requirements.txt for older
+          # pinned applug tags that pre-date pyproject.toml adoption.
+          for plug_dir in plugins/*/; do
+            if [ -f "${plug_dir}pyproject.toml" ]; then
+              PLUG_PY="${plug_dir}pyproject.toml" python3 -c "import tomllib,subprocess,sys,os; d=tomllib.load(open(os.environ['PLUG_PY'],'rb')); deps=d.get('project',{}).get('dependencies',[]); subprocess.run([sys.executable,'-m','pip','install']+deps,check=True) if deps else None"
+            elif [ -f "${plug_dir}requirements.txt" ]; then
+              pip install -r "${plug_dir}requirements.txt"
+            fi
           done
 
       - name: Run PyInstaller (freeze the product bundle)
@@ -773,11 +785,11 @@ jobs:
           # never installed before PyInstaller froze the bundle. PyInstaller can
           # only collect packages importable in THIS environment, so alembic /
           # fastapi / uvicorn / sqlalchemy were silently omitted and the app
-          # died at the first third-party import. Install the cloned matika's
-          # pinned deps here, BEFORE the freeze. Use requirements.txt (NOT
-          # `pip install -e .`) to avoid the pyproject requires-python>=3.14 gate
-          # (CI runs Python 3.11).
-          pip install -r requirements.txt
+          # died at the first third-party import. Extract deps from pyproject.toml
+          # and install them individually (NOT `pip install -e .`) to bypass the
+          # requires-python>=3.14 gate — CI runs Python 3.11, but the individual
+          # packages are all 3.11-compatible. tomllib is stdlib from Python 3.11+.
+          python3 -c "import tomllib,subprocess,sys; d=tomllib.load(open('pyproject.toml','rb')); subprocess.run([sys.executable,'-m','pip','install']+d['project']['dependencies'],check=True)"
 
       - name: Install AppLug runtime dependencies
         shell: bash
@@ -788,8 +800,14 @@ jobs:
           # importable and collected by collect_all() in matika.spec. Without
           # this step, eyerate's symbol lookup/search silently returns empty
           # in the frozen app because curl_cffi/yfinance are not bundled.
-          for req in plugins/*/requirements.txt; do
-            [ -f "$req" ] && pip install -r "$req"
+          # Prefer pyproject.toml; fall back to requirements.txt for older
+          # pinned applug tags that pre-date pyproject.toml adoption.
+          for plug_dir in plugins/*/; do
+            if [ -f "${plug_dir}pyproject.toml" ]; then
+              PLUG_PY="${plug_dir}pyproject.toml" python3 -c "import tomllib,subprocess,sys,os; d=tomllib.load(open(os.environ['PLUG_PY'],'rb')); deps=d.get('project',{}).get('dependencies',[]); subprocess.run([sys.executable,'-m','pip','install']+deps,check=True) if deps else None"
+            elif [ -f "${plug_dir}requirements.txt" ]; then
+              pip install -r "${plug_dir}requirements.txt"
+            fi
           done
 
       - name: Run PyInstaller (freeze the product bundle)

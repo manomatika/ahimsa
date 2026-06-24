@@ -14,10 +14,14 @@
     `needs: validate`, run in parallel. **Fully implemented, not stubbed.** Each job:
     1. fetches recipe from mm, reads metadata, clones matika at `recipe.matika.tag`,
        clones each applug into `build/matika/plugins/`;
-    2. **installs matika's `requirements.txt` AND every `plugins/*/requirements.txt`
-       BEFORE PyInstaller** — so `collect_all()` in `matika.spec` actually finds
-       `alembic`/`curl_cffi`/`yfinance` rather than being a no-op (this ordering is
-       why the freeze stopped failing with "No module named 'alembic'");
+    2. **extracts matika's runtime deps from `pyproject.toml` and installs them
+       individually BEFORE PyInstaller** (bypasses the `requires-python>=3.14` gate
+       since CI runs Python 3.11; individual packages are 3.11-compatible); similarly
+       installs each applug's deps from its `pyproject.toml` (falling back to
+       `requirements.txt` for older pinned tags) — so `collect_all()` in
+       `matika.spec` actually finds `alembic`/`curl_cffi`/`yfinance` rather than
+       being a no-op (this ordering is why the freeze stopped failing with "No module
+       named 'alembic'");
     3. `npm install && npm run build`, then `pyinstaller matika.spec --noconfirm`,
        asserting the bundle name matches the recipe's product identity;
     4. wraps the output — macOS via `scripts/make_dmg.py` (dmgbuild); Windows via
