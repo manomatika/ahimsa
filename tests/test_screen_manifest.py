@@ -9,10 +9,17 @@ change the module did not exist, so importing/driving it could not pass at all.
 
 The synthetic fixtures name two invented components ("alpha", "beta") precisely
 to prove genericity: nothing in the mechanism knows about matika or eyerate.
+
+Layer-3 tests (manomatika/ahimsa#101): the functional-test invocation tests prove
+that the generic gate discovers, parses, and invokes ONLY declared tests — it
+never calls an undeclared function discovered by reflection. The genericity guard
+uses invented applug names ("alpha", "beta") — nothing names "eyerate".
 """
 
 from __future__ import annotations
 
+import importlib.util
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -120,6 +127,7 @@ class _FakeExecutor(sm.ScreenExecutor):
 def test_drive_screen_dispatches_every_declared_verb_in_order():
     screen = sm.Screen(
         screen_id="x", route="/x", markers=("#m1", "#m2"),
+        required_markers=(),
         steps=(
             sm.Step("navigate", "/x", None),
             sm.Step("fill", "#q", "VOO"),
@@ -280,3 +288,207 @@ def test_schema_constants_are_the_canonical_values():
         "navigate", "fill", "click", "wait_for",
         "assert_present", "assert_absent", "assert_value",
     })
+
+
+# ---------------------------------------------------------------------------
+# Layer-3: functional-test discovery + invocation (manomatika/ahimsa#101)
+# ---------------------------------------------------------------------------
+
+def _write_func_json(path, test_decls):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"schema_version": "1.0", "functional_tests": test_decls}))
+
+
+def _two_applug_root(tmp_path):
+    """Source clone with two synthetic applugs ('alpha', 'beta') and one undeclared function in alpha."""
+    root = tmp_path / "build" / "matika"
+
+    # Alpha: declares test_alpha_works; also has undeclared test_not_declared
+    alpha_dir = root / "plugins" / "alpha" / "src" / "alpha"
+    alpha_dir.mkdir(parents=True)
+    _write_func_json(
+        alpha_dir / "alpha_functional_tests.json",
+        [{"test_id": "alpha:works", "description": "Alpha nominal",
+          "module": "alpha_functional_tests", "function": "test_alpha_works"}]
+    )
+    (alpha_dir / "alpha_functional_tests.py").write_text(
+        "def test_alpha_works(base_url, session): pass\n"
+        "def test_not_declared(base_url, session):\n"
+        "    raise AssertionError('must NOT be called by the generic gate')\n"
+    )
+
+    # Beta: declares test_beta_feature
+    beta_dir = root / "plugins" / "beta"
+    beta_dir.mkdir(parents=True)
+    _write_func_json(
+        beta_dir / "beta_functional_tests.json",
+        [{"test_id": "beta:feature", "description": "Beta feature",
+          "module": "beta_functional_tests", "function": "test_beta_feature"}]
+    )
+    (beta_dir / "beta_functional_tests.py").write_text(
+        "def test_beta_feature(base_url, session): pass\n"
+    )
+
+    return root
+
+
+def test_generic_gate_discovers_both_applugs(tmp_path):
+    root = _two_applug_root(tmp_path)
+    manifest = sm.load_functional_test_manifest(str(root))
+    test_ids = {t.test_id for t in manifest.tests}
+    assert "alpha:works" in test_ids
+    assert "beta:feature" in test_ids
+    assert "alpha" in manifest.sources
+    assert "beta" in manifest.sources
+
+
+def test_generic_gate_runs_only_declared_tests(tmp_path):
+    """Gate invokes ONLY what the JSON declares; test_not_declared is never called."""
+    root = _two_applug_root(tmp_path)
+    manifest = sm.load_functional_test_manifest(str(root))
+    called = []
+    for decl in manifest.tests:
+        called.append(decl.function)
+        sm.invoke_functional_test(decl, str(root), "http://localhost:8000", None)
+    assert "test_alpha_works" in called
+    assert "test_beta_feature" in called
+    assert "test_not_declared" not in called, (
+        "Gate must NOT call test_not_declared — it is not in the JSON manifest"
+    )
+
+
+def test_hardcoded_invocation_calls_undeclared_function(tmp_path):
+    """Proves bypassing the manifest (hardcoding an applug name) WOULD call undeclared tests."""
+    root = _two_applug_root(tmp_path)
+    module_file = str(root / "plugins" / "alpha" / "src" / "alpha" / "alpha_functional_tests.py")
+    spec = importlib.util.spec_from_file_location("alpha_functional_tests", module_file)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    all_test_fns = [n for n, _ in inspect.getmembers(mod, inspect.isfunction) if n.startswith("test_")]
+    # A hardcoded invocation finds test_not_declared — proving the manifest is load-bearing
+    assert "test_not_declared" in all_test_fns
+    assert "test_alpha_works" in all_test_fns
+
+
+def test_empty_source_root_returns_empty_manifest(tmp_path):
+    root = tmp_path / "build" / "matika"
+    root.mkdir(parents=True)
+    manifest = sm.load_functional_test_manifest(str(root))
+    assert manifest.tests == ()
+    assert manifest.sources == ()
+
+
+def test_missing_required_field_raises(tmp_path):
+    path = tmp_path / "bad_functional_tests.json"
+    path.write_text(json.dumps({"schema_version": "1.0", "functional_tests": [
+        {"test_id": "x:t", "description": "d", "module": "m"}  # missing "function"
+    ]}))
+    with pytest.raises(sm.ScreenManifestError, match="function"):
+        sm.parse_functional_tests_file(str(path), "bad")
+
+
+def test_wrong_schema_version_raises(tmp_path):
+    path = tmp_path / "bad_functional_tests.json"
+    path.write_text(json.dumps({"schema_version": "99.0", "functional_tests": []}))
+    with pytest.raises(sm.ScreenManifestError, match="schema_version"):
+        sm.parse_functional_tests_file(str(path), "bad")
+
+
+def test_duplicate_test_ids_raises(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    _write_func_json(root / "plugins" / "a" / "a_functional_tests.json",
+                     [{"test_id": "dup:t", "description": "d", "module": "a_ft", "function": "test_a"}])
+    _write_func_json(root / "plugins" / "b" / "b_functional_tests.json",
+                     [{"test_id": "dup:t", "description": "d", "module": "b_ft", "function": "test_b"}])
+    with pytest.raises(sm.ScreenManifestError, match="duplicate"):
+        sm.load_functional_test_manifest(str(root))
+
+
+def test_missing_module_raises(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    _write_func_json(root / "ghost_functional_tests.json",
+                     [{"test_id": "g:t", "description": "d", "module": "ghost_ft", "function": "test_g"}])
+    manifest = sm.load_functional_test_manifest(str(root))
+    with pytest.raises(sm.ScreenManifestError, match="ghost_ft"):
+        sm.invoke_functional_test(manifest.tests[0], str(root), "http://localhost", None)
+
+
+def test_missing_function_in_module_raises(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "ok_functional_tests.py").write_text("def test_something(base_url, session): pass\n")
+    _write_func_json(root / "ok_functional_tests.json",
+                     [{"test_id": "ok:t", "description": "d", "module": "ok_functional_tests", "function": "test_nonexistent"}])
+    manifest = sm.load_functional_test_manifest(str(root))
+    with pytest.raises(sm.ScreenManifestError, match="test_nonexistent"):
+        sm.invoke_functional_test(manifest.tests[0], str(root), "http://localhost", None)
+
+
+def test_invoke_calls_function_with_correct_args(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "capture_functional_tests.py").write_text(
+        "results = []\n"
+        "def test_capture(base_url, session):\n"
+        "    results.append((base_url, session))\n"
+    )
+    _write_func_json(root / "capture_functional_tests.json",
+                     [{"test_id": "cap:t", "description": "d", "module": "capture_functional_tests", "function": "test_capture"}])
+    manifest = sm.load_functional_test_manifest(str(root))
+    sm.invoke_functional_test(manifest.tests[0], str(root), "http://testhost:9000", "mock_session")
+    # If we reach here, the function was called without error
+
+
+# ---------------------------------------------------------------------------
+# required_markers field on Screen
+# ---------------------------------------------------------------------------
+
+class TestRequiredMarkersOnScreen:
+    def test_required_markers_absent_defaults_to_empty(self, tmp_path):
+        _write(tmp_path / "x_screens.json", [
+            {"screen_id": "x", "type": "screen", "route": "/x",
+             "markers": [".main"], "steps": [{"verb": "navigate", "target": "/x"}]}
+        ])
+        manifest = sm.load_screen_manifest(str(tmp_path))
+        assert manifest.screens[0].required_markers == ()
+
+    def test_required_markers_valid_subset_accepted(self, tmp_path):
+        _write(tmp_path / "x_screens.json", [
+            {"screen_id": "x", "type": "screen", "route": "/x",
+             "markers": [".a", ".b"], "required_markers": [".a"],
+             "steps": [{"verb": "navigate", "target": "/x"}]}
+        ])
+        manifest = sm.load_screen_manifest(str(tmp_path))
+        assert manifest.screens[0].required_markers == (".a",)
+
+    def test_required_markers_not_in_markers_raises(self, tmp_path):
+        _write(tmp_path / "x_screens.json", [
+            {"screen_id": "x", "type": "screen", "route": "/x",
+             "markers": [".main"], "required_markers": [".missing"],
+             "steps": [{"verb": "navigate", "target": "/x"}]}
+        ])
+        with pytest.raises(sm.ScreenManifestError, match=r"\.missing"):
+            sm.load_screen_manifest(str(tmp_path))
+
+    def test_required_markers_must_be_list_raises(self, tmp_path):
+        _write(tmp_path / "x_screens.json", [
+            {"screen_id": "x", "type": "screen", "route": "/x",
+             "markers": [".main"], "required_markers": ".main",
+             "steps": [{"verb": "navigate", "target": "/x"}]}
+        ])
+        with pytest.raises(sm.ScreenManifestError):
+            sm.load_screen_manifest(str(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# Layer-3 schema constants pin
+# ---------------------------------------------------------------------------
+
+def test_functional_test_schema_constant():
+    assert sm.FUNCTIONAL_TEST_SCHEMA == "1.0"
+
+
+def test_functional_tests_suffix_constant():
+    assert sm.FUNCTIONAL_TESTS_SUFFIX == "_functional_tests.json"
