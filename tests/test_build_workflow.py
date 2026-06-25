@@ -45,6 +45,14 @@ INSTALL_VERIFY_JOBS = [
     "install-verify-macos-intel",
     "install-verify-windows",
 ]
+# Each install-verify job consumes the SHA outputs of its matching build job
+# (provenance threading) so its discovery side-clone is byte-identical to what
+# the build job froze, instead of re-resolving the mutable recipe tag.
+INSTALL_VERIFY_TO_BUILD = {
+    "install-verify-macos-arm": "build-macos-arm",
+    "install-verify-macos-intel": "build-macos-intel",
+    "install-verify-windows": "build-windows",
+}
 
 
 @pytest.fixture(scope="module")
@@ -61,6 +69,22 @@ def _job_run_blocks(job: dict) -> str:
 
 def _step_names(job: dict) -> list[str]:
     return [step.get("name", "") for step in job.get("steps", [])]
+
+
+def _job_env_blob(job: dict) -> str:
+    """Concatenate every env value declared at the job level and per-step.
+
+    Job-output consumption (``needs.<job>.outputs.*``) is threaded through step
+    ``env:`` blocks, which ``_job_run_blocks`` does not see — this helper exposes
+    them for assertions.
+    """
+    parts: list[str] = []
+    for key, val in (job.get("env") or {}).items():
+        parts.append(f"{key}: {val}")
+    for step in job.get("steps", []):
+        for key, val in (step.get("env") or {}).items():
+            parts.append(f"{key}: {val}")
+    return "\n".join(parts)
 
 
 def test_build_yml_is_valid_yaml(workflow):
@@ -107,6 +131,39 @@ def test_build_job_clones_applugs_into_plugins(workflow, job_name):
     assert "build/matika/plugins/" in runs
     # Each applug is pinned by its own explicit tag from the recipe.
     assert 'plug["tag"]' in runs
+
+
+# ---------------------------------------------------------------------------
+# SHA provenance — build jobs RESOLVE the frozen commits and emit them as job
+# outputs so install-verify can rebuild a byte-identical discovery side-clone.
+# Tags are mutable; re-resolving the tag on the verify side could side-clone a
+# DIFFERENT commit than the one that was frozen.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_build_job_declares_sha_outputs(workflow, job_name):
+    """Each build job must declare matika_sha + applug_shas job outputs, wired to
+    the resolving step (id: shas)."""
+    outputs = workflow["jobs"][job_name].get("outputs", {})
+    assert "matika_sha" in outputs, f"{job_name} must declare a matika_sha output"
+    assert "applug_shas" in outputs, f"{job_name} must declare an applug_shas output"
+    assert "steps.shas.outputs.matika_sha" in str(outputs["matika_sha"])
+    assert "steps.shas.outputs.applug_shas" in str(outputs["applug_shas"])
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_build_job_resolves_and_emits_shas(workflow, job_name):
+    """A step (id: shas) must rev-parse the frozen commits and write both
+    matika_sha= and applug_shas= to $GITHUB_OUTPUT."""
+    job = workflow["jobs"][job_name]
+    resolve_steps = [s for s in job["steps"] if s.get("id") == "shas"]
+    assert resolve_steps, f"{job_name} must have a SHA-resolving step with id: shas"
+    run = resolve_steps[0].get("run", "")
+    assert "rev-parse HEAD" in run, f"{job_name} shas step must rev-parse HEAD"
+    assert "matika_sha=" in run
+    assert "applug_shas=" in run
+    assert "$GITHUB_OUTPUT" in run
 
 
 @pytest.mark.parametrize("job_name", BUILD_JOBS)
@@ -611,42 +668,83 @@ def test_pyinstaller_bundle_assertion_step_exists(workflow, job_name):
 
 
 @pytest.mark.parametrize("job_name", INSTALL_VERIFY_JOBS)
-def test_install_verify_recipe_info_emits_matika_repo_and_tag(workflow, job_name):
-    """recipe_info must surface matika repo+tag so the side-clone can be pinned."""
+def test_install_verify_recipe_info_emits_matika_repo_not_tag(workflow, job_name):
+    """recipe_info must surface the matika repo URL (the side-clone remote) but NO
+    LONGER the tag — the discovery clone is pinned to the build job's resolved
+    SHA, not the mutable recipe tag."""
     runs = _job_run_blocks(workflow["jobs"][job_name])
     assert 'r["matika"]["repo"]' in runs, (
-        f"{job_name} recipe_info must read the recipe's matika.repo"
+        f"{job_name} recipe_info must read the recipe's matika.repo (remote URL)"
     )
-    assert 'r["matika"]["tag"]' in runs, (
-        f"{job_name} recipe_info must read the recipe's matika.tag"
+    assert "matika_repo=" in runs, (
+        f"{job_name} recipe_info must emit the matika_repo output"
     )
-    assert "matika_repo=" in runs and "matika_tag=" in runs, (
-        f"{job_name} recipe_info must emit matika_repo and matika_tag outputs"
+    # The tag is no longer used for the discovery clone (SHA-pinned now).
+    assert 'r["matika"]["tag"]' not in runs, (
+        f"{job_name} must NOT read matika.tag — the discovery clone is SHA-pinned"
+    )
+    assert "matika_tag=" not in runs, (
+        f"{job_name} must NOT emit a matika_tag output — it is unused now"
     )
 
 
 @pytest.mark.parametrize("job_name", INSTALL_VERIFY_JOBS)
 def test_install_verify_clones_pinned_sources(workflow, job_name):
-    """Each install-verify job must side-clone matika + applugs at the pinned tag."""
+    """Each install-verify job must SHA-PIN its discovery side-clone to the build
+    job's resolved commits — NOT re-clone by the mutable recipe tag.
+
+    (Updated from the previous tag-clone reality: tags are mutable, so the verify
+    side now fetches the exact frozen commits via the fetch-by-SHA pattern.)
+    """
     job = workflow["jobs"][job_name]
     names = _step_names(job)
     runs = _job_run_blocks(job)
-    assert any("Clone Matika" in n for n in names), (
-        f"{job_name} must clone matika for the source-root fork"
+    assert any("Checkout matika" in n for n in names), (
+        f"{job_name} must SHA-checkout matika for the source-root fork"
     )
-    assert any("Clone AppLugs" in n for n in names), (
-        f"{job_name} must clone the applugs into build/matika/plugins/"
+    assert any("Checkout applugs" in n for n in names), (
+        f"{job_name} must SHA-checkout the applugs into build/matika/plugins/"
     )
     assert any("Configure git credentials" in n for n in names), (
-        f"{job_name} must set up git credentials before cloning"
+        f"{job_name} must set up git credentials before fetching"
     )
-    # Clone matika at the recipe's pinned tag into build/matika (tag-pinned
-    # matching the build job — same provenance arm).
-    assert 'git clone --depth 1 --branch "$MATIKA_TAG"' in runs
+    # Fetch-by-SHA (git init + fetch <sha> + checkout FETCH_HEAD), not clone-by-tag.
+    assert "fetch --depth 1 origin" in runs
+    assert "FETCH_HEAD" in runs
+    assert 'git clone --depth 1 --branch "$MATIKA_TAG"' not in runs, (
+        f"{job_name} must NOT re-clone the discovery side-clone by the mutable tag"
+    )
     assert "build/matika" in runs
     assert "build/matika/plugins/" in runs
-    # Applugs pinned by their own explicit tag, mirroring the build jobs.
-    assert 'plug["tag"]' in runs
+    # The applug COMMIT comes from the build job's emitted applug_shas JSON,
+    # keyed by applug name — never re-resolved from the applug's tag.
+    assert "APPLUG_SHAS" in runs
+    assert "shas[name]" in runs
+    assert 'plug["tag"]' not in runs, (
+        f"{job_name} must NOT clone applugs by tag — the commit is SHA-pinned"
+    )
+
+
+@pytest.mark.parametrize("job_name", INSTALL_VERIFY_JOBS)
+def test_install_verify_consumes_build_sha_outputs(workflow, job_name):
+    """The install-verify job must `needs` its build job and consume that job's
+    matika_sha + applug_shas outputs, threading them to the SHA-pinned checkout."""
+    job = workflow["jobs"][job_name]
+    build_job = INSTALL_VERIFY_TO_BUILD[job_name]
+    needs = job.get("needs")
+    needs = [needs] if isinstance(needs, str) else (needs or [])
+    assert build_job in needs, f"{job_name} must `needs: {build_job}`"
+    env_blob = _job_env_blob(job)
+    assert f"needs.{build_job}.outputs.matika_sha" in env_blob, (
+        f"{job_name} must consume needs.{build_job}.outputs.matika_sha"
+    )
+    assert f"needs.{build_job}.outputs.applug_shas" in env_blob, (
+        f"{job_name} must consume needs.{build_job}.outputs.applug_shas"
+    )
+    # And the SHA must reach the checkout commands via the env vars.
+    runs = _job_run_blocks(job)
+    assert "${MATIKA_SHA}" in runs
+    assert "APPLUG_SHAS" in runs
 
 
 @pytest.mark.parametrize("job_name", INSTALL_VERIFY_JOBS)

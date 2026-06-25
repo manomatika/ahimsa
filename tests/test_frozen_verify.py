@@ -485,3 +485,142 @@ def test_main_functional_without_source_root_errors(fv, tmp_path):
                                      "--scenario", "fresh", "--functional"]):
         rc = fv.main()
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# L3 RESET DISCIPLINE — randomized, seed-reproducible per-applug ordering
+#
+# Within one applug's boot, its tests run in a RANDOMIZED order so that any
+# order-dependent state leak (a test that did not reset what it mutated) surfaces.
+# The order must be DETERMINISTIC for a given base seed (replayable) and the base
+# seed must be LOGGED. _run_applug_tests is the extracted pure helper exercised
+# here without a real frozen boot (invoke_functional_test is patched to record).
+# ---------------------------------------------------------------------------
+
+
+def _decls(source, test_ids):
+    return [
+        screen_manifest.FunctionalTestDecl(
+            test_id=tid, description="d", module=f"{source}_ft",
+            function="run", tags=(), source=source,
+        )
+        for tid in test_ids
+    ]
+
+
+def test_run_applug_tests_same_seed_same_order(fv, monkeypatch):
+    """Same base seed -> identical execution order (replayable)."""
+    decls = _decls("alpha", [f"alpha:{i}" for i in range(8)])
+    seen = []
+    monkeypatch.setattr(
+        screen_manifest, "invoke_functional_test",
+        lambda decl, sr, bu, sess: seen.append(decl.test_id),
+    )
+    fv._run_applug_tests(decls, "/root", "http://x", None, seed=1234)
+    order1 = list(seen)
+    seen.clear()
+    fv._run_applug_tests(decls, "/root", "http://x", None, seed=1234)
+    order2 = list(seen)
+    assert order1 == order2
+    # All declared tests ran exactly once (randomization is a permutation).
+    assert sorted(order1) == [d.test_id for d in decls]
+
+
+def test_run_applug_tests_order_varies_with_seed(fv, monkeypatch):
+    """Ordering genuinely depends on the seed — it is not a fixed order. This is
+    the VERIFIER that reset discipline (not run order) is what keeps tests green."""
+    decls = _decls("alpha", [f"alpha:{i}" for i in range(8)])
+    seen = []
+    monkeypatch.setattr(
+        screen_manifest, "invoke_functional_test",
+        lambda decl, sr, bu, sess: seen.append(decl.test_id),
+    )
+    orders = set()
+    for s in range(25):
+        seen.clear()
+        fv._run_applug_tests(decls, "/root", "http://x", None, seed=s)
+        orders.add(tuple(seen))
+    assert len(orders) > 1
+
+
+def test_run_applug_tests_failure_isolation(fv, monkeypatch):
+    """A failing test does not stop the rest; result tuples report each outcome."""
+    decls = _decls("alpha", ["alpha:ok1", "alpha:boom", "alpha:ok2"])
+
+    def fake_invoke(decl, sr, bu, sess):
+        if decl.test_id == "alpha:boom":
+            raise RuntimeError("synthetic")
+
+    monkeypatch.setattr(screen_manifest, "invoke_functional_test", fake_invoke)
+    results = fv._run_applug_tests(decls, "/root", "http://x", None, seed=7)
+    by_id = {tid: (ok, err) for tid, ok, err in results}
+    assert set(by_id) == {"alpha:ok1", "alpha:boom", "alpha:ok2"}
+    assert by_id["alpha:ok1"][0] is True
+    assert by_id["alpha:ok2"][0] is True
+    assert by_id["alpha:boom"][0] is False
+    assert "synthetic" in by_id["alpha:boom"][1]
+
+
+def test_derive_seed_is_deterministic_per_source(fv):
+    """One base seed -> a stable per-applug seed for each source."""
+    assert fv._derive_seed(42, "alpha") == fv._derive_seed(42, "alpha")
+    assert fv._derive_seed(42, "beta") == fv._derive_seed(42, "beta")
+    # Different sources generally derive different seeds (so orders are not coupled).
+    assert fv._derive_seed(42, "alpha") != fv._derive_seed(42, "beta")
+
+
+def test_l3_logs_replayable_seed_when_provided(fv, tmp_path, monkeypatch, capsys):
+    """An explicit --l3-seed is logged greppably so the run is replayable."""
+    root = _make_functional_source_root(tmp_path, [("alpha", ["a1", "a2", "a3"])])
+    _patch_l3(fv, monkeypatch)
+    fv.run_l3_functional("exe", 8000, 30, str(root), seed=4242)
+    out = capsys.readouterr().out
+    assert "L3 random seed: 4242" in out
+
+
+def test_l3_generates_and_logs_seed_when_none(fv, tmp_path, monkeypatch, capsys):
+    """With no seed, one is generated and logged (greppable 'L3 random seed:')."""
+    root = _make_functional_source_root(tmp_path, [("alpha", ["a1"])])
+    _patch_l3(fv, monkeypatch)
+    fv.run_l3_functional("exe", 8000, 30, str(root))  # seed=None
+    out = capsys.readouterr().out
+    assert "L3 random seed:" in out
+
+
+def test_l3_same_seed_reproduces_run_order(fv, tmp_path, monkeypatch):
+    """run_l3_functional with the same seed produces the same per-applug order."""
+    root = _make_functional_source_root(
+        tmp_path, [("alpha", ["a1", "a2", "a3", "a4"])])
+    _b1, _l1, inv1 = _patch_l3(fv, monkeypatch)
+    fv.run_l3_functional("exe", 8000, 30, str(root), seed=99)
+    order1 = [tid for tid, _s, _sess in inv1]
+    _b2, _l2, inv2 = _patch_l3(fv, monkeypatch)
+    fv.run_l3_functional("exe", 8000, 30, str(root), seed=99)
+    order2 = [tid for tid, _s, _sess in inv2]
+    assert order1 == order2
+    assert sorted(order1) == ["a1", "a2", "a3", "a4"]
+
+
+def test_main_threads_l3_seed(fv, tmp_path, monkeypatch):
+    """main() parses --l3-seed and threads it into run_l3_functional."""
+    import sys
+    from unittest.mock import patch
+
+    exe = tmp_path / "exe"
+    exe.write_text("")
+    captured = {}
+
+    def fake_l3(exe_, port, timeout, source_root, seed=None):
+        captured["seed"] = seed
+        return True
+
+    monkeypatch.setattr(fv, "_load_manifest", lambda sr: None)
+    monkeypatch.setattr(fv, "scenario_fresh", lambda *a, **k: None)
+    monkeypatch.setattr(fv, "run_l3_functional", fake_l3)
+    with patch.object(sys, "argv", ["frozen_verify.py", "--exe", str(exe),
+                                     "--scenario", "fresh",
+                                     "--source-root", str(tmp_path),
+                                     "--l3-seed", "777"]):
+        rc = fv.main()
+    assert rc == 0
+    assert captured["seed"] == 777

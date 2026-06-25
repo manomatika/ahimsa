@@ -69,6 +69,12 @@ jobs:
   build-macos-arm:
     runs-on: macos-14
     needs: validate
+    # SHA-PROVENANCE: emit the EXACT commits this job froze so the matching
+    # install-verify job rebuilds its discovery side-clone byte-identically
+    # (mutable tags must not be re-resolved on the verify side).
+    outputs:
+      matika_sha: ${{ steps.shas.outputs.matika_sha }}
+      applug_shas: ${{ steps.shas.outputs.applug_shas }}
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
@@ -184,6 +190,39 @@ jobs:
                   check=True,
               )
           PYEOF
+
+      - name: Resolve pinned commit SHAs (provenance for install-verify)
+        id: shas
+        shell: bash
+        run: |
+          # Tags are mutable; the install-verify side-clone must be rebuilt from
+          # the EXACT commits frozen here, not by re-resolving the recipe tag.
+          # Resolve matika's HEAD and every cloned applug's HEAD and emit them as
+          # job outputs: matika_sha (string) + applug_shas (JSON object, generic
+          # over the applug set, e.g. {"eyerate":"<sha>"}).
+          MATIKA_SHA="$(git -C build/matika rev-parse HEAD)"
+          echo "matika_sha=${MATIKA_SHA}" >> "$GITHUB_OUTPUT"
+          python3 - <<'PYEOF' > applug_shas.json
+          import json, os, subprocess
+          shas = {}
+          plugins_dir = os.path.join("build", "matika", "plugins")
+          if os.path.isdir(plugins_dir):
+              for name in sorted(os.listdir(plugins_dir)):
+                  dest = os.path.join(plugins_dir, name)
+                  if not os.path.isdir(dest):
+                      continue
+                  sha = subprocess.run(
+                      ["git", "-C", dest, "rev-parse", "HEAD"],
+                      check=True, capture_output=True, text=True,
+                  ).stdout.strip()
+                  shas[name] = sha
+          print(json.dumps(shas))
+          PYEOF
+          APPLUG_SHAS="$(cat applug_shas.json)"
+          echo "applug_shas=${APPLUG_SHAS}" >> "$GITHUB_OUTPUT"
+          rm -f applug_shas.json
+          echo "Resolved matika_sha=${MATIKA_SHA}"
+          echo "Resolved applug_shas=${APPLUG_SHAS}"
 
       - name: Build frontend (npm)
         shell: bash
@@ -370,6 +409,12 @@ jobs:
   build-macos-intel:
     runs-on: macos-15-intel
     needs: validate
+    # SHA-PROVENANCE: emit the EXACT commits this job froze so the matching
+    # install-verify job rebuilds its discovery side-clone byte-identically
+    # (mutable tags must not be re-resolved on the verify side).
+    outputs:
+      matika_sha: ${{ steps.shas.outputs.matika_sha }}
+      applug_shas: ${{ steps.shas.outputs.applug_shas }}
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
@@ -485,6 +530,39 @@ jobs:
                   check=True,
               )
           PYEOF
+
+      - name: Resolve pinned commit SHAs (provenance for install-verify)
+        id: shas
+        shell: bash
+        run: |
+          # Tags are mutable; the install-verify side-clone must be rebuilt from
+          # the EXACT commits frozen here, not by re-resolving the recipe tag.
+          # Resolve matika's HEAD and every cloned applug's HEAD and emit them as
+          # job outputs: matika_sha (string) + applug_shas (JSON object, generic
+          # over the applug set, e.g. {"eyerate":"<sha>"}).
+          MATIKA_SHA="$(git -C build/matika rev-parse HEAD)"
+          echo "matika_sha=${MATIKA_SHA}" >> "$GITHUB_OUTPUT"
+          python3 - <<'PYEOF' > applug_shas.json
+          import json, os, subprocess
+          shas = {}
+          plugins_dir = os.path.join("build", "matika", "plugins")
+          if os.path.isdir(plugins_dir):
+              for name in sorted(os.listdir(plugins_dir)):
+                  dest = os.path.join(plugins_dir, name)
+                  if not os.path.isdir(dest):
+                      continue
+                  sha = subprocess.run(
+                      ["git", "-C", dest, "rev-parse", "HEAD"],
+                      check=True, capture_output=True, text=True,
+                  ).stdout.strip()
+                  shas[name] = sha
+          print(json.dumps(shas))
+          PYEOF
+          APPLUG_SHAS="$(cat applug_shas.json)"
+          echo "applug_shas=${APPLUG_SHAS}" >> "$GITHUB_OUTPUT"
+          rm -f applug_shas.json
+          echo "Resolved matika_sha=${MATIKA_SHA}"
+          echo "Resolved applug_shas=${APPLUG_SHAS}"
 
       - name: Build frontend (npm)
         shell: bash
@@ -667,6 +745,12 @@ jobs:
   build-windows:
     runs-on: windows-latest
     needs: validate
+    # SHA-PROVENANCE: emit the EXACT commits this job froze so the matching
+    # install-verify job rebuilds its discovery side-clone byte-identically
+    # (mutable tags must not be re-resolved on the verify side).
+    outputs:
+      matika_sha: ${{ steps.shas.outputs.matika_sha }}
+      applug_shas: ${{ steps.shas.outputs.applug_shas }}
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
@@ -784,6 +868,39 @@ jobs:
                   check=True,
               )
           PYEOF
+
+      - name: Resolve pinned commit SHAs (provenance for install-verify)
+        id: shas
+        shell: bash
+        run: |
+          # Tags are mutable; the install-verify side-clone must be rebuilt from
+          # the EXACT commits frozen here, not by re-resolving the recipe tag.
+          # Resolve matika's HEAD and every cloned applug's HEAD and emit them as
+          # job outputs: matika_sha (string) + applug_shas (JSON object, generic
+          # over the applug set, e.g. {"eyerate":"<sha>"}).
+          MATIKA_SHA="$(git -C build/matika rev-parse HEAD)"
+          echo "matika_sha=${MATIKA_SHA}" >> "$GITHUB_OUTPUT"
+          python3 - <<'PYEOF' > applug_shas.json
+          import json, os, subprocess
+          shas = {}
+          plugins_dir = os.path.join("build", "matika", "plugins")
+          if os.path.isdir(plugins_dir):
+              for name in sorted(os.listdir(plugins_dir)):
+                  dest = os.path.join(plugins_dir, name)
+                  if not os.path.isdir(dest):
+                      continue
+                  sha = subprocess.run(
+                      ["git", "-C", dest, "rev-parse", "HEAD"],
+                      check=True, capture_output=True, text=True,
+                  ).stdout.strip()
+                  shas[name] = sha
+          print(json.dumps(shas))
+          PYEOF
+          APPLUG_SHAS="$(cat applug_shas.json)"
+          echo "applug_shas=${APPLUG_SHAS}" >> "$GITHUB_OUTPUT"
+          rm -f applug_shas.json
+          echo "Resolved matika_sha=${MATIKA_SHA}"
+          echo "Resolved applug_shas=${APPLUG_SHAS}"
 
       - name: Build frontend (npm)
         shell: bash
@@ -1010,14 +1127,12 @@ jobs:
           product_name = app["product_name"]
           product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
           product_ver  = app["version"]
-          # Mirror the build-* jobs: surface the recipe's pinned matika repo+tag
-          # so install-verify can side-clone the SAME pinned sources for the
-          # manifest-driven L2 (tier-a/b) + L3 functional-test discovery. The
-          # INSTALLED artifact stays under test (--exe); manifest/test discovery
-          # comes from the pinned source clone (Option-3 source-root fork,
-          # tag-pinned matching the build job).
+          # Surface the recipe's matika repo URL only — the COMMIT to check out
+          # comes from the matching build job's resolved SHA output (provenance-
+          # pinned), NOT from re-resolving the mutable recipe tag. The INSTALLED
+          # artifact stays under test (--exe); manifest/test discovery comes from
+          # the SHA-pinned source side-clone (Option-3 source-root fork).
           matika_repo  = r["matika"]["repo"]
-          matika_tag   = r["matika"]["tag"]
           if not matika_repo.startswith("http"):
               matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
@@ -1026,10 +1141,9 @@ jobs:
               f.write(f"product_slug={product_slug}\n")
               f.write(f"product_version={product_ver}\n")
               f.write(f"matika_repo={matika_repo}\n")
-              f.write(f"matika_tag={matika_tag}\n")
           print(f"Product  : {product_name} v{product_ver}")
           print(f"Slug     : {product_slug}")
-          print(f"Matika   : {matika_tag}")
+          print(f"Matika repo : {matika_repo}")
           PYEOF
 
       - name: Configure git credentials for GitHub App token
@@ -1038,43 +1152,52 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh auth setup-git
 
-      - name: Clone Matika at declared version (Option-3 source-root for manifest discovery)
+      - name: Checkout matika at the build job's resolved SHA (provenance-pinned)
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          MATIKA_SHA: ${{ needs.build-macos-arm.outputs.matika_sha }}
         run: |
-          # Option-3 source-root fork: install-verify tests the INSTALLED
-          # artifact (--exe) but discovers the screen + functional-test manifests
-          # from a side-clone of the SAME pinned sources the build job used
-          # (tag-pinned matching). The L3 functional-test .py code is read ONLY
-          # from this clone — it is NEVER bundled into the product artifact.
+          # PROVENANCE: tags are mutable, so the discovery side-clone is pinned
+          # to the EXACT commit the build job froze
+          # (needs.build-macos-arm.outputs.matika_sha), NOT re-resolved from the
+          # recipe tag. Fetch-by-SHA (GitHub allows it): init an empty repo, add
+          # the recipe's matika remote, fetch the one commit, check it out. The L3
+          # functional-test .py is read ONLY from this clone — never bundled.
           MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
-          MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
-          echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
-          git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
+          echo "Fetching matika @ ${MATIKA_SHA} from ${MATIKA_REPO}"
+          git init build/matika
+          git -C build/matika remote add origin "${MATIKA_REPO}"
+          git -C build/matika fetch --depth 1 origin "${MATIKA_SHA}"
+          git -C build/matika checkout FETCH_HEAD
 
-      - name: Clone AppLugs into build/matika/plugins/
+      - name: Checkout applugs at the build job's resolved SHAs (provenance-pinned)
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APPLUG_SHAS: ${{ needs.build-macos-arm.outputs.applug_shas }}
         run: |
+          # The applug repo URL + name still come from the recipe; the COMMIT
+          # comes from the build job's emitted applug_shas JSON, keyed by applug
+          # name — so the side-clone is byte-identical to what was frozen.
           python3 - <<'PYEOF'
           import json, os, subprocess
           path = os.environ["RECIPE_PATH"]
+          shas = json.loads(os.environ["APPLUG_SHAS"])
           with open(path) as f:
               r = json.load(f)
           for plug in r["applugs"]:
               repo = plug["repo"]
               if not repo.startswith("http"):
                   repo = "https://" + repo
-              tag  = plug["tag"]
               name = plug["name"]
+              sha  = shas[name]
               dest = f"build/matika/plugins/{name}"
-              print(f"Cloning {name} @ {tag} from {repo} -> {dest}")
-              subprocess.run(
-                  ["git", "clone", "--depth", "1", "--branch", tag, repo, dest],
-                  check=True,
-              )
+              print(f"Fetching {name} @ {sha} from {repo} -> {dest}")
+              subprocess.run(["git", "init", dest], check=True)
+              subprocess.run(["git", "-C", dest, "remote", "add", "origin", repo], check=True)
+              subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", sha], check=True)
+              subprocess.run(["git", "-C", dest, "checkout", "FETCH_HEAD"], check=True)
           PYEOF
 
       - name: Download DMG artifact
@@ -1179,14 +1302,12 @@ jobs:
           product_name = app["product_name"]
           product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
           product_ver  = app["version"]
-          # Mirror the build-* jobs: surface the recipe's pinned matika repo+tag
-          # so install-verify can side-clone the SAME pinned sources for the
-          # manifest-driven L2 (tier-a/b) + L3 functional-test discovery. The
-          # INSTALLED artifact stays under test (--exe); manifest/test discovery
-          # comes from the pinned source clone (Option-3 source-root fork,
-          # tag-pinned matching the build job).
+          # Surface the recipe's matika repo URL only — the COMMIT to check out
+          # comes from the matching build job's resolved SHA output (provenance-
+          # pinned), NOT from re-resolving the mutable recipe tag. The INSTALLED
+          # artifact stays under test (--exe); manifest/test discovery comes from
+          # the SHA-pinned source side-clone (Option-3 source-root fork).
           matika_repo  = r["matika"]["repo"]
-          matika_tag   = r["matika"]["tag"]
           if not matika_repo.startswith("http"):
               matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
@@ -1195,10 +1316,9 @@ jobs:
               f.write(f"product_slug={product_slug}\n")
               f.write(f"product_version={product_ver}\n")
               f.write(f"matika_repo={matika_repo}\n")
-              f.write(f"matika_tag={matika_tag}\n")
           print(f"Product  : {product_name} v{product_ver}")
           print(f"Slug     : {product_slug}")
-          print(f"Matika   : {matika_tag}")
+          print(f"Matika repo : {matika_repo}")
           PYEOF
 
       - name: Configure git credentials for GitHub App token
@@ -1207,43 +1327,52 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh auth setup-git
 
-      - name: Clone Matika at declared version (Option-3 source-root for manifest discovery)
+      - name: Checkout matika at the build job's resolved SHA (provenance-pinned)
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          MATIKA_SHA: ${{ needs.build-macos-intel.outputs.matika_sha }}
         run: |
-          # Option-3 source-root fork: install-verify tests the INSTALLED
-          # artifact (--exe) but discovers the screen + functional-test manifests
-          # from a side-clone of the SAME pinned sources the build job used
-          # (tag-pinned matching). The L3 functional-test .py code is read ONLY
-          # from this clone — it is NEVER bundled into the product artifact.
+          # PROVENANCE: tags are mutable, so the discovery side-clone is pinned
+          # to the EXACT commit the build job froze
+          # (needs.build-macos-intel.outputs.matika_sha), NOT re-resolved from the
+          # recipe tag. Fetch-by-SHA (GitHub allows it): init an empty repo, add
+          # the recipe's matika remote, fetch the one commit, check it out. The L3
+          # functional-test .py is read ONLY from this clone — never bundled.
           MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
-          MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
-          echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
-          git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
+          echo "Fetching matika @ ${MATIKA_SHA} from ${MATIKA_REPO}"
+          git init build/matika
+          git -C build/matika remote add origin "${MATIKA_REPO}"
+          git -C build/matika fetch --depth 1 origin "${MATIKA_SHA}"
+          git -C build/matika checkout FETCH_HEAD
 
-      - name: Clone AppLugs into build/matika/plugins/
+      - name: Checkout applugs at the build job's resolved SHAs (provenance-pinned)
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APPLUG_SHAS: ${{ needs.build-macos-intel.outputs.applug_shas }}
         run: |
+          # The applug repo URL + name still come from the recipe; the COMMIT
+          # comes from the build job's emitted applug_shas JSON, keyed by applug
+          # name — so the side-clone is byte-identical to what was frozen.
           python3 - <<'PYEOF'
           import json, os, subprocess
           path = os.environ["RECIPE_PATH"]
+          shas = json.loads(os.environ["APPLUG_SHAS"])
           with open(path) as f:
               r = json.load(f)
           for plug in r["applugs"]:
               repo = plug["repo"]
               if not repo.startswith("http"):
                   repo = "https://" + repo
-              tag  = plug["tag"]
               name = plug["name"]
+              sha  = shas[name]
               dest = f"build/matika/plugins/{name}"
-              print(f"Cloning {name} @ {tag} from {repo} -> {dest}")
-              subprocess.run(
-                  ["git", "clone", "--depth", "1", "--branch", tag, repo, dest],
-                  check=True,
-              )
+              print(f"Fetching {name} @ {sha} from {repo} -> {dest}")
+              subprocess.run(["git", "init", dest], check=True)
+              subprocess.run(["git", "-C", dest, "remote", "add", "origin", repo], check=True)
+              subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", sha], check=True)
+              subprocess.run(["git", "-C", dest, "checkout", "FETCH_HEAD"], check=True)
           PYEOF
 
       - name: Download DMG artifact
@@ -1341,14 +1470,12 @@ jobs:
           product_name = app["product_name"]
           product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
           product_ver  = app["version"]
-          # Mirror the build-* jobs: surface the recipe's pinned matika repo+tag
-          # so install-verify can side-clone the SAME pinned sources for the
-          # manifest-driven L2 (tier-a/b) + L3 functional-test discovery. The
-          # INSTALLED artifact stays under test (--exe); manifest/test discovery
-          # comes from the pinned source clone (Option-3 source-root fork,
-          # tag-pinned matching the build job).
+          # Surface the recipe's matika repo URL only — the COMMIT to check out
+          # comes from the matching build job's resolved SHA output (provenance-
+          # pinned), NOT from re-resolving the mutable recipe tag. The INSTALLED
+          # artifact stays under test (--exe); manifest/test discovery comes from
+          # the SHA-pinned source side-clone (Option-3 source-root fork).
           matika_repo  = r["matika"]["repo"]
-          matika_tag   = r["matika"]["tag"]
           if not matika_repo.startswith("http"):
               matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
@@ -1357,10 +1484,9 @@ jobs:
               f.write(f"product_slug={product_slug}\n")
               f.write(f"product_version={product_ver}\n")
               f.write(f"matika_repo={matika_repo}\n")
-              f.write(f"matika_tag={matika_tag}\n")
           print(f"Product  : {product_name} v{product_ver}")
           print(f"Slug     : {product_slug}")
-          print(f"Matika   : {matika_tag}")
+          print(f"Matika repo : {matika_repo}")
           PYEOF
 
       - name: Configure git credentials for GitHub App token
@@ -1369,43 +1495,52 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh auth setup-git
 
-      - name: Clone Matika at declared version (Option-3 source-root for manifest discovery)
+      - name: Checkout matika at the build job's resolved SHA (provenance-pinned)
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          MATIKA_SHA: ${{ needs.build-windows.outputs.matika_sha }}
         run: |
-          # Option-3 source-root fork: install-verify tests the INSTALLED
-          # artifact (--exe) but discovers the screen + functional-test manifests
-          # from a side-clone of the SAME pinned sources the build job used
-          # (tag-pinned matching). The L3 functional-test .py code is read ONLY
-          # from this clone — it is NEVER bundled into the product artifact.
+          # PROVENANCE: tags are mutable, so the discovery side-clone is pinned
+          # to the EXACT commit the build job froze
+          # (needs.build-windows.outputs.matika_sha), NOT re-resolved from the
+          # recipe tag. Fetch-by-SHA (GitHub allows it): init an empty repo, add
+          # the recipe's matika remote, fetch the one commit, check it out. The L3
+          # functional-test .py is read ONLY from this clone — never bundled.
           MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
-          MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
-          echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
-          git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
+          echo "Fetching matika @ ${MATIKA_SHA} from ${MATIKA_REPO}"
+          git init build/matika
+          git -C build/matika remote add origin "${MATIKA_REPO}"
+          git -C build/matika fetch --depth 1 origin "${MATIKA_SHA}"
+          git -C build/matika checkout FETCH_HEAD
 
-      - name: Clone AppLugs into build/matika/plugins/
+      - name: Checkout applugs at the build job's resolved SHAs (provenance-pinned)
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APPLUG_SHAS: ${{ needs.build-windows.outputs.applug_shas }}
         run: |
+          # The applug repo URL + name still come from the recipe; the COMMIT
+          # comes from the build job's emitted applug_shas JSON, keyed by applug
+          # name — so the side-clone is byte-identical to what was frozen.
           python3 - <<'PYEOF'
           import json, os, subprocess
           path = os.environ["RECIPE_PATH"]
+          shas = json.loads(os.environ["APPLUG_SHAS"])
           with open(path) as f:
               r = json.load(f)
           for plug in r["applugs"]:
               repo = plug["repo"]
               if not repo.startswith("http"):
                   repo = "https://" + repo
-              tag  = plug["tag"]
               name = plug["name"]
+              sha  = shas[name]
               dest = f"build/matika/plugins/{name}"
-              print(f"Cloning {name} @ {tag} from {repo} -> {dest}")
-              subprocess.run(
-                  ["git", "clone", "--depth", "1", "--branch", tag, repo, dest],
-                  check=True,
-              )
+              print(f"Fetching {name} @ {sha} from {repo} -> {dest}")
+              subprocess.run(["git", "init", dest], check=True)
+              subprocess.run(["git", "-C", dest, "remote", "add", "origin", repo], check=True)
+              subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", sha], check=True)
+              subprocess.run(["git", "-C", dest, "checkout", "FETCH_HEAD"], check=True)
           PYEOF
 
       - name: Download installer EXE artifact

@@ -161,6 +161,15 @@ class FunctionalTestDecl:
 
     The gate invokes ONLY what each applug explicitly declares here — it never
     calls undeclared functions discovered by reflection (rule-22 genericity guard).
+
+    ``setup`` / ``teardown`` are OPTIONAL function names (same module, same
+    ``(base_url, session)`` signature). When declared, ``setup`` ARRANGES the
+    test's preconditions before the body and ``teardown`` RESETS what the test
+    mutated back to known-initial-state with GUARANTEED-RUN semantics (it runs
+    even when the body raises). Reset discipline lets the gate run each applug's
+    tests in RANDOMIZED order — the verifier that every test cleans up after
+    itself. The fields are additive and OPTIONAL: they do NOT change the
+    ``FUNCTIONAL_TEST_SCHEMA`` (still ``"1.0"``).
     """
     test_id: str
     description: str
@@ -168,6 +177,8 @@ class FunctionalTestDecl:
     function: str
     tags: Tuple[str, ...]
     source: str  # applug source id (derived from discovery path)
+    setup: Optional[str] = None
+    teardown: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -423,6 +434,9 @@ def parse_functional_tests_file(path: str, source_id: str) -> List[FunctionalTes
             function=entry["function"],
             tags=tuple(entry.get("tags") or ()),
             source=source_id,
+            # OPTIONAL, additive — default None when not declared.
+            setup=entry.get("setup"),
+            teardown=entry.get("teardown"),
         ))
     return decls
 
@@ -503,7 +517,14 @@ def invoke_functional_test(
 
     The gate calls ONLY what is explicitly declared in the manifest — it never
     discovers or calls undeclared functions (rule-22 genericity guard). Raises
-    ScreenManifestError if the module file or the declared function cannot be found.
+    ScreenManifestError if the module file or any declared function (body, and
+    the OPTIONAL ``setup`` / ``teardown``) cannot be found.
+
+    Lifecycle: the module is resolved ONCE; if ``setup`` is declared it runs
+    first; the body call is then wrapped in ``try/finally`` so a declared
+    ``teardown`` ALWAYS runs — even when the body raises — giving every test
+    guaranteed-run reset of whatever it mutated. setup/teardown share the body's
+    ``(base_url, session)`` signature.
     """
     module_file = _find_module_file(source_root, decl.module)
     if module_file is None:
@@ -516,14 +537,28 @@ def invoke_functional_test(
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
-    fn = getattr(mod, decl.function, None)
-    if fn is None:
-        raise ScreenManifestError(
-            f"functional test {decl.test_id!r}: function {decl.function!r} not "
-            f"found in module {decl.module!r} ({module_file})"
-        )
+    def _resolve(fn_name: str, kind: str):
+        fn = getattr(mod, fn_name, None)
+        if fn is None:
+            raise ScreenManifestError(
+                f"functional test {decl.test_id!r}: {kind} {fn_name!r} not "
+                f"found in module {decl.module!r} ({module_file})"
+            )
+        return fn
 
-    fn(base_url=base_url, session=session)
+    # Resolve EVERYTHING up front so a malformed declaration fails before any
+    # side-effecting call runs.
+    body = _resolve(decl.function, "function")
+    setup_fn = _resolve(decl.setup, "setup") if decl.setup else None
+    teardown_fn = _resolve(decl.teardown, "teardown") if decl.teardown else None
+
+    if setup_fn is not None:
+        setup_fn(base_url=base_url, session=session)
+    try:
+        body(base_url=base_url, session=session)
+    finally:
+        if teardown_fn is not None:
+            teardown_fn(base_url=base_url, session=session)
 
 
 # ---------------------------------------------------------------------------
