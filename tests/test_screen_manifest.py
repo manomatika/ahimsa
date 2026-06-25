@@ -429,6 +429,99 @@ def test_invoke_calls_function_with_correct_args(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Layer-3 OPTIONAL setup / teardown lifecycle (reset discipline)
+#
+# A test ARRANGES preconditions (setup) and RESETS what it mutated (teardown)
+# with GUARANTEED-RUN semantics: teardown fires even when the body raises. The
+# fields are OPTIONAL and ADDITIVE — the schema constant stays "1.0". A side-
+# effect log FILE (written by the synthetic module, read back by the test) proves
+# call order, since invoke loads the module fresh each call.
+# ---------------------------------------------------------------------------
+
+_LIFECYCLE_MODULE = (
+    "import os\n"
+    "LOG = os.path.join(os.path.dirname(__file__), 'events.log')\n"
+    "def _ev(name):\n"
+    "    with open(LOG, 'a', encoding='utf-8') as f:\n"
+    "        f.write(name + '\\n')\n"
+    "def setup(base_url, session): _ev('setup')\n"
+    "def body(base_url, session): _ev('body')\n"
+    "def body_raises(base_url, session):\n"
+    "    _ev('body')\n"
+    "    raise RuntimeError('boom')\n"
+    "def teardown(base_url, session): _ev('teardown')\n"
+)
+
+
+def _events(root):
+    log = root / "events.log"
+    return log.read_text(encoding="utf-8").split() if log.exists() else []
+
+
+def test_setup_teardown_fields_are_optional_and_default_none(tmp_path):
+    """A decl without setup/teardown parses fine; the fields default to None."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "plain_functional_tests.py").write_text(
+        "def body(base_url, session): pass\n"
+    )
+    _write_func_json(root / "plain_functional_tests.json",
+                     [{"test_id": "p:t", "description": "d",
+                       "module": "plain_functional_tests", "function": "body"}])
+    manifest = sm.load_functional_test_manifest(str(root))
+    assert manifest.tests[0].setup is None
+    assert manifest.tests[0].teardown is None
+
+
+def test_setup_runs_before_body_then_teardown(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "lifecycle_functional_tests.py").write_text(_LIFECYCLE_MODULE)
+    _write_func_json(root / "lifecycle_functional_tests.json",
+                     [{"test_id": "lc:t", "description": "d",
+                       "module": "lifecycle_functional_tests", "function": "body",
+                       "setup": "setup", "teardown": "teardown"}])
+    manifest = sm.load_functional_test_manifest(str(root))
+    decl = manifest.tests[0]
+    assert decl.setup == "setup" and decl.teardown == "teardown"
+    sm.invoke_functional_test(decl, str(root), "http://x", None)
+    assert _events(root) == ["setup", "body", "teardown"]
+
+
+def test_teardown_runs_even_when_body_raises(tmp_path):
+    """GUARANTEED-RUN teardown: the body raises, the error propagates, but
+    teardown still executed (reset discipline holds under failure)."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "lifecycle_functional_tests.py").write_text(_LIFECYCLE_MODULE)
+    _write_func_json(root / "lifecycle_functional_tests.json",
+                     [{"test_id": "lc:boom", "description": "d",
+                       "module": "lifecycle_functional_tests", "function": "body_raises",
+                       "setup": "setup", "teardown": "teardown"}])
+    manifest = sm.load_functional_test_manifest(str(root))
+    with pytest.raises(RuntimeError, match="boom"):
+        sm.invoke_functional_test(manifest.tests[0], str(root), "http://x", None)
+    # teardown ran despite the failing body.
+    assert _events(root) == ["setup", "body", "teardown"]
+
+
+def test_missing_teardown_function_raises_before_body_runs(tmp_path):
+    """A declared-but-absent teardown is a hard error caught up front — the body
+    never runs (fail fast on a malformed declaration)."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "lifecycle_functional_tests.py").write_text(_LIFECYCLE_MODULE)
+    _write_func_json(root / "lifecycle_functional_tests.json",
+                     [{"test_id": "lc:t", "description": "d",
+                       "module": "lifecycle_functional_tests", "function": "body",
+                       "teardown": "no_such_teardown"}])
+    manifest = sm.load_functional_test_manifest(str(root))
+    with pytest.raises(sm.ScreenManifestError, match="no_such_teardown"):
+        sm.invoke_functional_test(manifest.tests[0], str(root), "http://x", None)
+    assert _events(root) == []  # body never ran
+
+
+# ---------------------------------------------------------------------------
 # required_markers field on Screen
 # ---------------------------------------------------------------------------
 

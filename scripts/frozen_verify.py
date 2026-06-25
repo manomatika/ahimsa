@@ -59,10 +59,16 @@ output so the reason is visible directly in the CI job log.
     discovers each applug's declared ``*_functional_tests.json`` from the pinned
     source clones, groups the tests by applug, and for EACH applug boots a FRESH
     app in a NEW clean HOME, mints a NEW session, runs only THAT applug's
-    declared tests, then tears down (reboot-per-applug). Failure for one applug
-    never aborts the others; ANY failed test fails the gate. WHO AUTHORS (the
-    applug) is separate from WHO INVOKES (this generic gate) — no isolation/
-    sandbox is implied.
+    declared tests in a RANDOMIZED (seeded) order, then tears down
+    (reboot-per-applug). Each test ARRANGES its own preconditions (declared
+    ``setup``) and RESETS what it mutated (declared ``teardown``, guaranteed-run);
+    randomized order is the verifier that reset discipline holds. The reboot is
+    coarse containment BETWEEN trust domains, NOT a substitute for per-test reset
+    (no within-applug reboot). The order is reproducible from one base seed
+    (logged as ``L3 random seed: <seed>``, replayable via ``--l3-seed``). Failure
+    for one applug never aborts the others; ANY failed test fails the gate. WHO
+    AUTHORS (the applug) is separate from WHO INVOKES (this generic gate) — no
+    isolation/sandbox is implied.
 
 Usage:
     python frozen_verify.py --exe <frozen-binary> --scenario fresh|upgrade \
@@ -77,6 +83,7 @@ import contextlib
 import glob
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -519,18 +526,71 @@ def _dump_failure(app: BootedApp) -> None:
 # the others. Every result is collected; the phase fails the gate (non-zero exit
 # overall) if ANY test failed.
 #
+# RESET DISCIPLINE + RANDOMIZED ORDER: within a single applug's boot, that
+# applug's tests run in a RANDOMIZED (seeded) order. Each test is expected to
+# ARRANGE its own preconditions (declared ``setup``) and RESET what it mutated
+# back to known-initial-state (declared ``teardown``, guaranteed-run via
+# try/finally in screen_manifest.invoke_functional_test). Randomized order is the
+# VERIFIER that reset discipline is complete — order-dependent state leaks surface
+# as flakes. The reboot is coarse containment BETWEEN independently-authored
+# applugs (separate trust domains), NOT a substitute for a test resetting its own
+# state: there is NO within-applug reboot. The whole run is reproducible from one
+# base seed (logged as "L3 random seed: <seed>", replayable via --l3-seed).
+#
 # Port: reuses the SAME port the single-boot tier-a/b phase used. The L3 boots
 # happen only AFTER that phase's `with BootedApp(...)` block has closed and its
 # process has been terminated/waited, so the port is free for each L3 boot
 # (which are themselves strictly sequential — one applug at a time).
 # ---------------------------------------------------------------------------
 
-def run_l3_functional(exe: str, port: int, timeout: int, source_root: str) -> bool:
+def _derive_seed(base_seed: int, source: str) -> int:
+    """Deterministically derive a per-applug ordering seed from the base seed.
+
+    The whole run is reproducible from the ONE logged base seed: the same base
+    seed yields the same per-applug seed (and therefore the same order) for every
+    applug, independent of how many applugs there are.
+    """
+    return random.Random(f"{base_seed}:{source}").randrange(2 ** 32)
+
+
+def _run_applug_tests(decls, source_root: str, base_url: str, session, seed: int):
+    """Run ONE applug's declared L3 tests in RANDOMIZED (seeded) order.
+
+    Pure of any boot/login concern (the caller injects an already-authenticated
+    ``session``) so the ordering + setup/teardown contract is unit-testable
+    without a real frozen app. Each declared test is invoked via
+    ``screen_manifest.invoke_functional_test`` — which runs its declared
+    ``setup`` first and its declared ``teardown`` with guaranteed-run semantics.
+    Per-test failures are ISOLATED: one failing test never stops the rest.
+
+    Returns a list of ``(test_id, ok: bool, error: str | None)`` in EXECUTION
+    (randomized) order.
+    """
+    ordered = list(decls)
+    random.Random(seed).shuffle(ordered)
+    results = []
+    for decl in ordered:
+        try:
+            screen_manifest.invoke_functional_test(
+                decl, source_root, base_url, session
+            )
+            results.append((decl.test_id, True, None))
+            print(f"      · [{decl.source}] {decl.test_id}: PASS")
+        except Exception as exc:  # noqa: BLE001 - isolate per test
+            results.append((decl.test_id, False, str(exc)))
+            print(f"      · [{decl.source}] {decl.test_id}: FAIL — {exc}")
+    return results
+
+
+def run_l3_functional(exe: str, port: int, timeout: int, source_root: str,
+                      seed: int | None = None) -> bool:
     """Run the Layer-3 applug-functional-test phase, REBOOT-PER-APPLUG.
 
-    Returns True if every declared functional test passed (or none were
-    declared), False if ANY test (or its applug's boot/login) failed. The caller
-    turns a False return into a non-zero overall exit.
+    Each applug's tests run in a randomized order derived from ``seed`` (a base
+    seed; when None one is generated and LOGGED so the run is replayable via
+    ``--l3-seed``). Returns True if every declared functional test passed (or none
+    were declared), False if ANY test (or its applug's boot/login) failed. The
+    caller turns a False return into a non-zero overall exit.
     """
     print("=== LAYER 3: applug-authored functional tests (reboot-per-applug) ===")
     manifest = screen_manifest.load_functional_test_manifest(source_root)
@@ -538,6 +598,11 @@ def run_l3_functional(exe: str, port: int, timeout: int, source_root: str) -> bo
         print("  L3 — no applug declared *_functional_tests.json; phase SKIPPED")
         print("=== L3: PASS (no functional tests declared) ===\n")
         return True
+
+    if seed is None:
+        seed = random.randrange(2 ** 32)
+    # Greppable + replayable: the one base seed reproduces the entire run's order.
+    print(f"  L3 random seed: {seed}  (replay this run with --l3-seed {seed})")
 
     # Group the flat declared-test list by applug source so each applug gets one
     # fresh boot covering exactly its own tests.
@@ -550,8 +615,9 @@ def run_l3_functional(exe: str, port: int, timeout: int, source_root: str) -> bo
 
     for source in sorted(by_source):
         decls = by_source[source]
+        applug_seed = _derive_seed(seed, source)
         print(f"  L3 — applug {source!r}: {len(decls)} functional test(s); "
-              f"booting a FRESH app in a clean HOME")
+              f"booting a FRESH app in a clean HOME (order seed {applug_seed})")
         home = tempfile.mkdtemp(prefix=f"mm-verify-l3-{source}-")
         app = BootedApp(exe, home, port, timeout)
         applug_failed = False
@@ -560,17 +626,15 @@ def run_l3_functional(exe: str, port: int, timeout: int, source_root: str) -> bo
                 # A NEW authenticated session is minted PER boot — never reused
                 # across applugs/boots.
                 session = _login(requests, app.base)
-                for decl in decls:
-                    try:
-                        screen_manifest.invoke_functional_test(
-                            decl, source_root, app.base, session
-                        )
-                        results.append((source, decl.test_id, True, None))
-                        print(f"      · [{source}] {decl.test_id}: PASS")
-                    except Exception as exc:  # noqa: BLE001 - isolate per test
+                # This applug's tests run in RANDOMIZED order; each ARRANGES and
+                # RESETS its own state (setup/teardown). No within-applug reboot.
+                applug_results = _run_applug_tests(
+                    decls, source_root, app.base, session, applug_seed
+                )
+                for test_id, ok, error in applug_results:
+                    results.append((source, test_id, ok, error))
+                    if not ok:
                         applug_failed = True
-                        results.append((source, decl.test_id, False, str(exc)))
-                        print(f"      · [{source}] {decl.test_id}: FAIL — {exc}")
                 if applug_failed:
                     _dump_failure(app)
         except Exception as exc:  # noqa: BLE001 - boot/login failure for this applug
@@ -643,6 +707,11 @@ def main() -> int:
                          "(reboot-per-applug). Also implied whenever --source-root "
                          "is given (the functional manifest is discovered from it). "
                          "Requires --source-root.")
+    ap.add_argument("--l3-seed", type=int, default=None,
+                    help="replay seed for the Layer-3 randomized per-applug test "
+                         "ordering. When omitted, a base seed is generated and "
+                         "LOGGED ('L3 random seed: <seed>') so a failing run can be "
+                         "reproduced verbatim by passing that value back here.")
     args = ap.parse_args()
 
     exe = os.path.abspath(args.exe)
@@ -671,7 +740,8 @@ def main() -> int:
         # closed (so the port is free), on BOTH scenarios (rule 22, both install
         # paths — CI invokes this once per scenario, so L3 runs on each path).
         if l3_enabled:
-            if not run_l3_functional(exe, args.port, args.timeout, args.source_root):
+            if not run_l3_functional(exe, args.port, args.timeout,
+                                     args.source_root, seed=args.l3_seed):
                 print(f"::error::frozen-verify [{args.scenario}] L3 functional "
                       f"phase FAILED")
                 return 1
