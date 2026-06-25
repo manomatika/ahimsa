@@ -291,3 +291,197 @@ def test_capture_route_inventory_parses_routes_marker(fv, capsys):
     fv._capture_route_inventory(_App(), manifest)
     out = capsys.readouterr().out
     assert "3 live GET route(s)" in out
+
+
+# ---------------------------------------------------------------------------
+# Layer-3 functional-test phase — reboot-per-applug loop (L3 gate integration)
+#
+# These pin the three load-bearing properties of run_l3_functional that a real
+# frozen boot in CI cannot cheaply prove locally:
+#   (1) a FRESH BootedApp + a fresh clean HOME per applug (boot count == applug
+#       count, distinct HOMEs);
+#   (2) a NEW session minted PER boot — never reused across applugs/boots;
+#   (3) FAILURE ISOLATION — one applug's failing test (or its boot/login) never
+#       aborts the others; every result is collected; the overall result is a
+#       failure (non-zero gate).
+# BootedApp and _login are patched (no real exe locally); invoke_functional_test
+# is patched to record (and conditionally raise) so the LOOP — not the already
+# unit-covered importlib invocation — is what is exercised here. Synthetic
+# applugs are alpha/beta (no real applug names).
+# ---------------------------------------------------------------------------
+
+
+def _make_functional_source_root(tmp_path, sources):
+    """Build a source root with one synthetic applug per (name, [test_ids]).
+
+    Each applug ships a real ``<name>_functional_tests.json`` + ``.py`` under
+    ``plugins/<name>/`` so the real discovery/grouping (load_functional_test_
+    manifest) runs; only the boot/login/invoke side effects are patched.
+    """
+    root = tmp_path / "src"
+    for name, test_ids in sources:
+        d = root / "plugins" / name
+        d.mkdir(parents=True)
+        decls = [
+            {"test_id": tid, "description": f"{tid} desc",
+             "module": f"{name}_functional_tests", "function": "run"}
+            for tid in test_ids
+        ]
+        (d / f"{name}_functional_tests.json").write_text(
+            json.dumps({"schema_version": "1.0", "functional_tests": decls})
+        )
+        (d / f"{name}_functional_tests.py").write_text(
+            "def run(base_url, session):\n    pass\n"
+        )
+    return root
+
+
+class _FakeBoot:
+    """Records each boot so reboot-per-applug behaviour is provable."""
+
+    def __init__(self, registry, exe, home, port, timeout):
+        self.exe, self.home, self.port, self.timeout = exe, home, port, timeout
+        self.base = f"http://127.0.0.1:{port}"
+        self.out_path = os.path.join(home, "boot.log")
+        registry.append(self)
+
+    @property
+    def logs_dir(self):
+        return self.home
+
+    def captured_text(self):
+        return ""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _patch_l3(fv, monkeypatch, *, fail_test_ids=()):
+    """Patch BootedApp / _login / invoke; return (boots, logins, invocations)."""
+    boots = []
+    logins = []          # sessions minted, in order
+    invocations = []     # (test_id, source, session)
+
+    monkeypatch.setattr(fv, "_require_requests", lambda: object())
+    monkeypatch.setattr(
+        fv, "BootedApp",
+        lambda exe, home, port, timeout: _FakeBoot(boots, exe, home, port, timeout),
+    )
+
+    def fake_login(requests, base):
+        sess = object()
+        logins.append(sess)
+        return sess
+
+    monkeypatch.setattr(fv, "_login", fake_login)
+
+    def fake_invoke(decl, source_root, base_url, session):
+        invocations.append((decl.test_id, decl.source, session))
+        if decl.test_id in fail_test_ids:
+            raise RuntimeError(f"synthetic failure for {decl.test_id}")
+
+    monkeypatch.setattr(screen_manifest, "invoke_functional_test", fake_invoke)
+    return boots, logins, invocations
+
+
+def test_l3_boots_fresh_app_per_applug(fv, tmp_path, monkeypatch):
+    """One FRESH BootedApp + a distinct clean HOME per applug declaring tests."""
+    root = _make_functional_source_root(
+        tmp_path, [("alpha", ["alpha:a"]), ("beta", ["beta:b"])])
+    boots, _logins, _inv = _patch_l3(fv, monkeypatch)
+    ok = fv.run_l3_functional("exe", 8000, 30, str(root))
+    assert ok is True
+    assert len(boots) == 2                      # boot count == applug count
+    assert len({b.home for b in boots}) == 2    # distinct HOMEs
+
+
+def test_l3_mints_new_session_per_boot_never_reused(fv, tmp_path, monkeypatch):
+    """A new session is minted per boot; an applug's tests share its one session,
+    and the two applugs never share a session."""
+    root = _make_functional_source_root(
+        tmp_path, [("alpha", ["alpha:a1", "alpha:a2"]), ("beta", ["beta:b1"])])
+    _boots, logins, invocations = _patch_l3(fv, monkeypatch)
+    fv.run_l3_functional("exe", 8000, 30, str(root))
+    # One session minted per boot (2 boots -> 2 sessions), all distinct.
+    assert len(logins) == 2
+    assert len({id(s) for s in logins}) == 2
+    by_source = {}
+    for _tid, source, session in invocations:
+        by_source.setdefault(source, set()).add(id(session))
+    # alpha's two tests shared exactly one session; beta got a different one.
+    assert len(by_source["alpha"]) == 1
+    assert len(by_source["beta"]) == 1
+    assert by_source["alpha"].isdisjoint(by_source["beta"])
+
+
+def test_l3_failure_isolation_one_test_does_not_abort_others(fv, tmp_path, monkeypatch):
+    """A failing test in one applug does not stop the other applug from running;
+    all results are collected and the overall gate result is FAILURE."""
+    root = _make_functional_source_root(
+        tmp_path, [("alpha", ["alpha:boom"]), ("beta", ["beta:ok"])])
+    boots, _logins, invocations = _patch_l3(
+        fv, monkeypatch, fail_test_ids={"alpha:boom"})
+    ok = fv.run_l3_functional("exe", 8000, 30, str(root))
+    assert ok is False                          # one failure fails the gate
+    assert len(boots) == 2                      # beta still booted after alpha failed
+    assert {tid for tid, _s, _sess in invocations} == {"alpha:boom", "beta:ok"}
+
+
+def test_l3_boot_login_failure_isolated_and_fails_gate(fv, tmp_path, monkeypatch):
+    """A boot/login failure for one applug fails the gate but does not abort the
+    other applug (which still boots and runs)."""
+    root = _make_functional_source_root(
+        tmp_path, [("alpha", ["alpha:a"]), ("beta", ["beta:b"])])
+    boots = []
+    logins = []
+    invocations = []
+    monkeypatch.setattr(fv, "_require_requests", lambda: object())
+    monkeypatch.setattr(
+        fv, "BootedApp",
+        lambda exe, home, port, timeout: _FakeBoot(boots, exe, home, port, timeout),
+    )
+
+    def fake_login(requests, base):
+        # alpha sorts first; make ITS login fail, beta's succeed.
+        if len(logins) == 0:
+            logins.append(None)
+            raise fv.FrozenAppError("synthetic alpha login failure")
+        sess = object()
+        logins.append(sess)
+        return sess
+
+    monkeypatch.setattr(fv, "_login", fake_login)
+    monkeypatch.setattr(
+        screen_manifest, "invoke_functional_test",
+        lambda decl, source_root, base_url, session: invocations.append(decl.test_id),
+    )
+    ok = fv.run_l3_functional("exe", 8000, 30, str(root))
+    assert ok is False                          # alpha boot/login failure fails gate
+    assert "beta:b" in invocations              # beta still ran
+    assert "alpha:a" not in invocations         # alpha never reached invoke
+
+
+def test_l3_skips_when_no_functional_tests_declared(fv, tmp_path, monkeypatch):
+    """A source root with no *_functional_tests.json is a PASS with zero boots."""
+    root = tmp_path / "empty"
+    root.mkdir()
+    boots, _logins, _inv = _patch_l3(fv, monkeypatch)
+    ok = fv.run_l3_functional("exe", 8000, 30, str(root))
+    assert ok is True
+    assert boots == []
+
+
+def test_main_functional_without_source_root_errors(fv, tmp_path):
+    """--functional with no --source-root is a hard error (nothing to discover)."""
+    import sys
+    from unittest.mock import patch
+
+    exe = tmp_path / "exe"
+    exe.write_text("")  # must exist so the exe-existence check passes first
+    with patch.object(sys, "argv", ["frozen_verify.py", "--exe", str(exe),
+                                     "--scenario", "fresh", "--functional"]):
+        rc = fv.main()
+    assert rc == 1

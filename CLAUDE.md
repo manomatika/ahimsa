@@ -137,14 +137,20 @@ product stack (compiled C/Rust extensions, sockets).
   Feature Verification*). (A1 — merged.)
 - **L3** — applug-AUTHORED FUNCTIONAL tests, GENERICALLY INVOKED by the product
   gate via a contract. WHO AUTHORS (the applug) is separate from WHO INVOKES (the
-  generic gate). No isolation requirement.
+  generic gate). No isolation requirement. ahimsa's gate invokes it
+  **reboot-per-applug**: for each applug declaring `*_functional_tests.json`, a
+  fresh frozen boot in a clean HOME with a new session runs that applug's tests;
+  a failure for one applug never aborts the others, and any failed test fails the
+  gate.
 
 **ahimsa's slice (pure mechanism).** ahimsa owns the GATE, not the tests and not
 the route classifications (applugs own those). It GENERICALLY INVOKES the testing
-model via the contract at the product gate: L2 runs today (the manifest-driven
-tier-a/tier-b frozen-feature checks); L3 generic invocation is the contracted
-target — the applug-functional-test contract is being adopted across repos and is
-not yet wired into ahimsa's gate. Either way, test execution is plain build
+model via the contract at the product gate: **L2** runs as the manifest-driven
+tier-a/tier-b frozen-feature checks, and **L3** is now wired in as the
+`--functional` reboot-per-applug phase of `frozen_verify.py` (discovery from the
+pinned source clones via `--source-root`; runs in every build-* job and, via the
+Option-3 source-root fork, every install-verify-* job — see *Frozen-App Feature
+Verification*). Either way, test execution is plain build
 automation: NO sandbox, NO WASM. The forthcoming advisory applug inspection
 (v0.0.2: import-linter allowlist + AST check + Bandit) is matika-OWNED (the
 canonical check) and is INVOKED by ahimsa at recipe build/validate; it is
