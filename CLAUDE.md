@@ -104,6 +104,52 @@ carry a pre-release suffix, and the two are decoupled. `build.yml`'s
 `workflow_dispatch` fetches the recipe from mm at the path given by the
 `recipe_path` input (default `recipes/reference-app/recipe.json`).
 
+## AppLug trust, test posture & the three-layer testing model
+
+**Install-trust posture ("posture (a)").** Installing an applug — via recipe at
+build time, or via future runtime applug loading — IS the trust decision; we
+trust everything at this stage. There is NO first-party/third-party distinction
+in mechanism: matika treats every applug identically. ManoMatika-org applugs are
+trusted by provenance and will live in a NON-PUBLIC org applug repo; the SDK only
+ever bundles the reference applug (eyerate). Dangerous host ops (network,
+filesystem, process, secrets) are expected THROUGH matika APIs — a reduced,
+documented, auditable safe-by-default surface — but this is CONVENTION + review,
+NOT a hard guarantee: an applug is in-process Python and cannot be prevented from
+reaching host primitives directly. We add hindrances to bad behavior to the
+extent practical, with no claim a determined bad actor is stopped. Posture
+authority of record: `manomatika/manomatika`'s `docs/ManoMatikaUseCases.md`.
+
+**Test execution is pure build automation — NOT a security boundary.** The
+framework discovers each applug's unit tests through a known interface and runs
+them ALL automatically at build time, identically for every applug. No trust
+dimension, no sandbox, no isolation. There is no WASM/Wasmtime/WASI sandboxing of
+applug code or tests — that approach is rejected on complexity, on introducing a
+security-critical runtime dependency, and on its inability to run the real
+product stack (compiled C/Rust extensions, sockets).
+
+**Three-layer testing model** (keep the three distinct; never collapse):
+
+- **L1** — every component unit/integration-tests its OWN functions in its OWN
+  suite.
+- **L2** — generic STRUCTURAL harness: domain-blind "every declared screen
+  routes, renders, shows its markers." Applug-agnostic. matika owns the contract;
+  ahimsa's gate RUNS it — the tier-a/tier-b frozen-app checks (see *Frozen-App
+  Feature Verification*). (A1 — merged.)
+- **L3** — applug-AUTHORED FUNCTIONAL tests, GENERICALLY INVOKED by the product
+  gate via a contract. WHO AUTHORS (the applug) is separate from WHO INVOKES (the
+  generic gate). No isolation requirement.
+
+**ahimsa's slice (pure mechanism).** ahimsa owns the GATE, not the tests and not
+the route classifications (applugs own those). It GENERICALLY INVOKES the testing
+model via the contract at the product gate: L2 runs today (the manifest-driven
+tier-a/tier-b frozen-feature checks); L3 generic invocation is the contracted
+target — the applug-functional-test contract is being adopted across repos and is
+not yet wired into ahimsa's gate. Either way, test execution is plain build
+automation: NO sandbox, NO WASM. The forthcoming advisory applug inspection
+(v0.0.2: import-linter allowlist + AST check + Bandit) is matika-OWNED (the
+canonical check) and is INVOKED by ahimsa at recipe build/validate; it is
+advisory, not blocking.
+
 ## Development Install & Testing
 
 Two install surfaces, two purposes (see README "Installing the CLI" for the
