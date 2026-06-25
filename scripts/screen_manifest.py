@@ -18,6 +18,14 @@ manomatika/matika#84's follow-on schema-parity test (M4). Do NOT add
 classification logic or screen content here — only the constants and the
 mechanism that consumes the assembled data.
 
+The Layer-3 functional-test constants (``FUNCTIONAL_TEST_SCHEMA``,
+``FUNCTIONAL_TESTS_SUFFIX``) are the gate's MIRROR of the contract defined in
+manomatika/matika#98. The discovery/parse/invoke functions below implement the
+generic invocation contract from manomatika/ahimsa#101: discover
+``*_functional_tests.json`` files, parse declarations, import the named module,
+and call the declared function — never hardcoding an applug name or calling an
+undeclared function.
+
 Hybrid read
 -----------
 Coverage enumeration is a HYBRID read with two arms:
@@ -45,6 +53,7 @@ file is a hard ``ScreenManifestError`` that fails the build.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -66,6 +75,11 @@ ALLOWED_VERBS = frozenset({
     "assert_absent",
     "assert_value",
 })
+
+# Layer-3 functional-test constants — MIRROR of the contract in matika#98.
+# The gate uses these to discover and validate applug-declared functional tests.
+FUNCTIONAL_TEST_SCHEMA = "1.0"
+FUNCTIONAL_TESTS_SUFFIX = "_functional_tests.json"
 
 _SCREENS_SUFFIX = "_screens.json"
 # Directories that never hold component screen data; skipped during discovery so
@@ -112,6 +126,7 @@ class Screen:
     screen_id: str
     route: str
     markers: Tuple[str, ...]
+    required_markers: Tuple[str, ...]  # subset of markers that MUST be present
     steps: Tuple[Step, ...]
     source: str  # component source id (e.g. "core", "eyerate") — discovery-derived
 
@@ -138,6 +153,32 @@ class ScreenManifest:
         routes = {s.route for s in self.screens}
         routes.update(e.get("route") for e in self.not_a_screen if e.get("route"))
         return sorted(r for r in routes if r)
+
+
+@dataclass(frozen=True)
+class FunctionalTestDecl:
+    """A single functional test declaration from an applug's ``*_functional_tests.json``.
+
+    The gate invokes ONLY what each applug explicitly declares here — it never
+    calls undeclared functions discovered by reflection (rule-22 genericity guard).
+    """
+    test_id: str
+    description: str
+    module: str
+    function: str
+    tags: Tuple[str, ...]
+    source: str  # applug source id (derived from discovery path)
+
+
+@dataclass(frozen=True)
+class FunctionalTestManifest:
+    """The assembled functional-test manifest across all applugs.
+
+    ``tests`` is the flat, de-duplicated list of declared tests.
+    ``sources`` is the sorted tuple of applug source ids that declared tests.
+    """
+    tests: Tuple[FunctionalTestDecl, ...]
+    sources: Tuple[str, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -237,10 +278,23 @@ def parse_screens_file(path: str, source_id: str) -> Tuple[List[Screen], List[di
                         f"allowed: {sorted(ALLOWED_VERBS)}"
                     )
                 steps.append(Step.from_dict(step_raw))
+            markers_set = set(entry.get("markers") or ())
+            required_markers_raw = entry.get("required_markers", [])
+            if not isinstance(required_markers_raw, list):
+                raise ScreenManifestError(
+                    f"{path}: screen {sid!r} 'required_markers' must be a list"
+                )
+            for rm in required_markers_raw:
+                if rm not in markers_set:
+                    raise ScreenManifestError(
+                        f"{path}: screen {sid!r} required_markers entry {rm!r} "
+                        f"is not in the screen's 'markers' list"
+                    )
             screens.append(Screen(
                 screen_id=sid,
                 route=entry.get("route"),
                 markers=tuple(entry.get("markers") or ()),
+                required_markers=tuple(required_markers_raw),
                 steps=tuple(steps),
                 source=source_id,
             ))
@@ -305,6 +359,171 @@ def _check_duplicate_ids(screens: Iterable[Screen], not_a_screen: Iterable[dict]
                 f"{src!r}; each screen_id must be unique across all sources"
             )
         seen[sid] = src
+
+
+# ---------------------------------------------------------------------------
+# Layer-3: functional-test discovery, parse, load, and invocation (ahimsa#101)
+#
+# The gate discovers *_functional_tests.json files generically across all
+# applugs, parses their declared test entries, and invokes ONLY the declared
+# functions via importlib — it never names an applug and never calls an
+# undeclared function (rule-22 genericity guard).
+# ---------------------------------------------------------------------------
+
+def discover_functional_test_files(source_root: str) -> List[str]:
+    """Return sorted absolute paths of every ``*_functional_tests.json`` under source_root.
+
+    Generic over applugs: any file matching the suffix is discovered, so the
+    gate picks up every applug that ships a functional-test declaration without
+    naming any of them. Uses the same ``_SKIP_DIRS`` exclusions as screen
+    discovery.
+    """
+    found: List[str] = []
+    for dirpath, dirnames, filenames in os.walk(source_root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for fn in filenames:
+            if fn.endswith(FUNCTIONAL_TESTS_SUFFIX):
+                found.append(os.path.join(dirpath, fn))
+    return sorted(found)
+
+
+def parse_functional_tests_file(path: str, source_id: str) -> List[FunctionalTestDecl]:
+    """Read + validate one ``*_functional_tests.json``; return list of FunctionalTestDecl.
+
+    Raises ScreenManifestError on any defect (bad JSON, wrong schema_version,
+    missing required fields) — the gate is strict (same policy as screens).
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ScreenManifestError(
+            f"could not read functional tests file {path}: {exc}"
+        ) from exc
+
+    schema = data.get("schema_version")
+    if schema != FUNCTIONAL_TEST_SCHEMA:
+        raise ScreenManifestError(
+            f"{path}: unsupported schema_version {schema!r} "
+            f"(gate requires {FUNCTIONAL_TEST_SCHEMA!r})"
+        )
+
+    decls: List[FunctionalTestDecl] = []
+    for entry in data.get("functional_tests", []):
+        for required_field in ("test_id", "description", "module", "function"):
+            if required_field not in entry:
+                raise ScreenManifestError(
+                    f"{path}: functional test entry is missing required field "
+                    f"{required_field!r}: {entry!r}"
+                )
+        decls.append(FunctionalTestDecl(
+            test_id=entry["test_id"],
+            description=entry["description"],
+            module=entry["module"],
+            function=entry["function"],
+            tags=tuple(entry.get("tags") or ()),
+            source=source_id,
+        ))
+    return decls
+
+
+def _source_id_for_functional(path: str, source_root: str) -> str:
+    """Derive a source id from a functional-tests-file path (for grouping/dedup)."""
+    rel = os.path.relpath(path, source_root)
+    parts = rel.split(os.sep)
+    if "plugins" in parts:
+        i = parts.index("plugins")
+        if i + 1 < len(parts):
+            return parts[i + 1]
+    stem = os.path.basename(path)[: -len(FUNCTIONAL_TESTS_SUFFIX)]
+    return stem or "unknown"
+
+
+def load_functional_test_manifest(source_root: str) -> FunctionalTestManifest:
+    """Load + merge the functional-test manifest from the pinned SOURCE CLONES.
+
+    ``source_root`` is the embedded build dir. Raises ScreenManifestError if
+    the root is absent or holds malformed data, or if duplicate test_ids are
+    found across sources. Returns an empty manifest (not an error) if no
+    ``*_functional_tests.json`` files are found.
+    """
+    if not os.path.isdir(source_root):
+        raise ScreenManifestError(f"source root not found: {source_root}")
+
+    files = discover_functional_test_files(source_root)
+    if not files:
+        return FunctionalTestManifest(tests=(), sources=())
+
+    all_decls: List[FunctionalTestDecl] = []
+    sources: set = set()
+    for path in files:
+        sid = _source_id_for_functional(path, source_root)
+        decls = parse_functional_tests_file(path, source_id=sid)
+        all_decls.extend(decls)
+        if decls:
+            sources.add(sid)
+
+    # Check for duplicate test_ids across sources
+    seen_ids: dict = {}
+    for decl in all_decls:
+        if decl.test_id in seen_ids:
+            raise ScreenManifestError(
+                f"duplicate test_id {decl.test_id!r} found in both "
+                f"{seen_ids[decl.test_id]!r} and {decl.source!r}; "
+                f"each test_id must be unique across all sources"
+            )
+        seen_ids[decl.test_id] = decl.source
+
+    return FunctionalTestManifest(
+        tests=tuple(all_decls),
+        sources=tuple(sorted(sources)),
+    )
+
+
+def _find_module_file(source_root: str, module_name: str) -> Optional[str]:
+    """Walk source_root for ``{module_name}.py``, skipping ``_SKIP_DIRS``.
+
+    Returns the first matching absolute path, or None if not found.
+    """
+    target = f"{module_name}.py"
+    for dirpath, dirnames, filenames in os.walk(source_root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        if target in filenames:
+            return os.path.join(dirpath, target)
+    return None
+
+
+def invoke_functional_test(
+    decl: FunctionalTestDecl,
+    source_root: str,
+    base_url: str,
+    session,
+) -> None:
+    """Load the declared module and call the declared function.
+
+    The gate calls ONLY what is explicitly declared in the manifest — it never
+    discovers or calls undeclared functions (rule-22 genericity guard). Raises
+    ScreenManifestError if the module file or the declared function cannot be found.
+    """
+    module_file = _find_module_file(source_root, decl.module)
+    if module_file is None:
+        raise ScreenManifestError(
+            f"functional test {decl.test_id!r}: module file not found for "
+            f"{decl.module!r} under {source_root}"
+        )
+
+    spec = importlib.util.spec_from_file_location(decl.module, module_file)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    fn = getattr(mod, decl.function, None)
+    if fn is None:
+        raise ScreenManifestError(
+            f"functional test {decl.test_id!r}: function {decl.function!r} not "
+            f"found in module {decl.module!r} ({module_file})"
+        )
+
+    fn(base_url=base_url, session=session)
 
 
 # ---------------------------------------------------------------------------

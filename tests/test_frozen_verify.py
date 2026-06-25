@@ -221,6 +221,7 @@ def _screen(fv_unused, screen_id="s1", route="/r1", markers=("#m1",),
             steps=(("navigate", "/r1", None),), source="core"):
     return screen_manifest.Screen(
         screen_id=screen_id, route=route, markers=tuple(markers),
+        required_markers=(),
         steps=tuple(screen_manifest.Step(v, t, val) for (v, t, val) in steps),
         source=source,
     )
