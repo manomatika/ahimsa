@@ -67,10 +67,12 @@ The shipped PRODUCT is **ManoMatika** — a pinned *triple* of component version
 - **Release / QA flow:** tag matika + eyerate as **prereleases** (the cycle is
   iterating through `v0.0.4-rc.N` candidates — re-pin the mm recipe each rc) →
   dispatch ahimsa `build.yml` (`workflow_dispatch`, recipe fetched from
-  `manomatika/manomatika`) → the build jobs now **automate the QA gate** in CI
-  (smoke-launch + tier-a/tier-b frozen feature verification on fresh + upgrade
-  paths; see *Frozen-App Feature Verification*) and produce the DMG/EXE → on a
-  green build + DMG QA pass, tag ahimsa v0.0.1, author the
+  `manomatika/manomatika`) → the build + install-verify jobs **automate the QA
+  gate** in CI (smoke-launch + L2 tier-a/tier-b structural checks + L3
+  applug-authored functional tests, on fresh + upgrade scenarios, against both the
+  freeze-dir and the installed artifact on all three OS targets; see *Frozen-App
+  Feature Verification*) and produce the DMG/EXE → on a green build + DMG QA pass,
+  tag ahimsa v0.0.1, author the
   `manomatika/manomatika` manifest/BOM, and cut the `manomatika/manomatika`
   product release with the DMG attached there. The prerelease flag is the trust
   boundary; the `manomatika/manomatika` product release is the only blessed
