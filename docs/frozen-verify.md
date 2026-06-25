@@ -10,6 +10,12 @@ gate is **pure build automation** — there is no sandbox, no isolation, and no
 trust dimension (see CLAUDE.md *AppLug trust, test posture & the three-layer
 testing model*).
 
+**Status: BUILT, not yet PROVEN.** The gate is implemented, unit-covered, and
+wired into `build.yml` (L1 in component suites + L2 structural + L3 functional, on
+both scenarios and both install paths). It has **not yet** been driven red→green
+against a live frozen artifact on a real dispatch — that end-to-end proof is A5
+(pending). Read the below as the built mechanism, not as a proven live run.
+
 Three scripts, run by every `build.yml` build job after the freeze (and again by
 the install-verify jobs against the installed artifact):
 
@@ -75,10 +81,29 @@ single-boot tier-a/b block has closed (so the port is free), the gate:
 2. groups them by applug, and
 3. for **each** applug, boots a **fresh** app in a **new clean `HOME`**, mints a
    **new** authenticated session for that boot (never reused across boots), runs
-   only that applug's declared tests via
+   only that applug's declared tests in a **randomized (seeded) order** via
    `screen_manifest.invoke_functional_test` (which imports the declared module
    and calls the declared function with `base_url` + `session`), then tears the
    boot down before the next applug (**reboot-per-applug**).
+
+**Self-arrange / self-reset (the reset discipline).** Each test **arranges** its
+own preconditions (declared `setup`) and **resets** what it mutated back to
+known-initial state (declared `teardown`, run with guaranteed-run try/finally
+semantics — it runs even when the test body raises). The functional-test schema
+is **version 1.0**, with `setup`/`teardown` as **optional** fields (same module,
+same `(base_url, session)` signature as the test body). The **randomized order is
+the verifier** that this reset discipline actually holds — order-dependent state
+leakage surfaces as a failure rather than passing by luck. A test that cannot
+reset its own mutation is a **defect**, never rebooted-around: the reboot is
+**coarse containment BETWEEN applugs only** (independently-authored trust
+domains), **not** a substitute for per-test reset — there is **no within-applug
+reboot**.
+
+**Replayability.** The whole run is reproducible from **one base seed**, logged
+as `L3 random seed: <seed>` (greppable) and replayable via `--l3-seed <seed>`.
+When `--l3-seed` is omitted a base seed is generated and logged; each applug's
+ordering seed is derived deterministically from that one base seed, so the same
+base seed reproduces the entire run's order.
 
 **Failure isolation:** a failing boot, login, or test for one applug never aborts
 the others — every result is collected and a per-applug, per-test PASS/FAIL
@@ -129,22 +154,27 @@ clones**, not the product artifact. The L3 functional-test `.py` code is read
   --source-root build/matika --functional` for both scenarios with `--browser`.
 - **install-verify-\* jobs** (Option-3 source-root fork) mount/install the built
   artifact and keep `--exe` on that **installed** binary, but **also** side-clone
-  the **same** pinned sources (matika core + applugs, tag-pinned matching the
-  build job) into `build/matika` and pass `--source-root build/matika
-  --functional`. So the installed artifact is what is exercised, while screen +
-  functional-test discovery comes from the pinned clone.
+  the pinned sources (matika core + applugs) into `build/matika` checked out at
+  the matching build job's **resolved commit SHAs** (see *Provenance note* below),
+  then pass `--source-root build/matika --functional`. So the installed artifact
+  is what is exercised, while screen + functional-test discovery comes from the
+  SHA-pinned clone.
 
 Together these turn product-behavior regressions — stale plugin code after an
 upgrade, a removed/renamed screen, a wrong render, or a broken applug feature —
 into hard CI failures on the frozen artifact, on both the fresh-install and
 upgrade-over-stale paths, on all three OS targets.
 
-### Provenance note (SHA-hardening, follow-on)
+### Provenance note (SHA-pinned discovery, Option-3)
 
-The install-verify side-clone is pinned by **tag**, matching the build job's
-clone (tag-pinned matching). For byte-identical provenance, the build job's
-**resolved commit SHAs** would be threaded from build → install-verify and the
-side-clone checked out at those exact SHAs. That SHA-hardening is intentionally
-**not** implemented here (it would require passing SHAs across jobs); tag-pinned
-matching is the current contract, and the per-product manifest/BOM (owned by
-manomatika/manomatika) is where tag-AND-SHA pinning is recorded.
+The install-verify side-clone is pinned by **resolved commit SHA**, not by tag.
+Each `build-*` job resolves its tag-pinned clones to commit SHAs and emits them
+as job outputs (`matika_sha` — a string; `applug_shas` — a JSON object keyed by
+applug name). The matching `install-verify-*` job consumes those outputs
+(`needs.build-*.outputs.matika_sha` / `.applug_shas`) and checks the side-clone
+out at **those exact SHAs** — never re-resolving the (mutable) tag on the verify
+side. This gives byte-identical provenance between what was built and what
+discovery reads, while test `.py` code is still read only from the side-clone and
+**never bundled** into the product artifact. The per-product manifest/BOM (owned
+by manomatika/manomatika) is where tag-AND-SHA pinning is recorded for the
+shipped product.

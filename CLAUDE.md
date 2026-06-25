@@ -139,8 +139,15 @@ product stack (compiled C/Rust extensions, sockets).
   gate via a contract. WHO AUTHORS (the applug) is separate from WHO INVOKES (the
   generic gate). No isolation requirement. ahimsa's gate invokes it
   **reboot-per-applug**: for each applug declaring `*_functional_tests.json`, a
-  fresh frozen boot in a clean HOME with a new session runs that applug's tests;
-  a failure for one applug never aborts the others, and any failed test fails the
+  fresh frozen boot in a clean HOME with a new session runs that applug's tests in
+  **randomized (seeded) order** (base seed logged as `L3 random seed: <seed>`,
+  replayable via `--l3-seed`). Each test self-arranges (declared `setup`) and
+  self-resets (declared `teardown`, guaranteed-run); the randomized order is the
+  verifier that reset discipline holds, so a test that cannot reset its own
+  mutation is a **defect**, never rebooted-around — the reboot is coarse
+  containment BETWEEN applugs only, with no within-applug reboot. The
+  functional-test schema is version 1.0 with optional `setup`/`teardown`. A
+  failure for one applug never aborts the others, and any failed test fails the
   gate.
 
 **ahimsa's slice (pure mechanism).** ahimsa owns the GATE, not the tests and not
