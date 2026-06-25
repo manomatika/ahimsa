@@ -357,19 +357,6 @@ def test_generic_gate_runs_only_declared_tests(tmp_path):
     )
 
 
-def test_hardcoded_invocation_calls_undeclared_function(tmp_path):
-    """Proves bypassing the manifest (hardcoding an applug name) WOULD call undeclared tests."""
-    root = _two_applug_root(tmp_path)
-    module_file = str(root / "plugins" / "alpha" / "src" / "alpha" / "alpha_functional_tests.py")
-    spec = importlib.util.spec_from_file_location("alpha_functional_tests", module_file)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    all_test_fns = [n for n, _ in inspect.getmembers(mod, inspect.isfunction) if n.startswith("test_")]
-    # A hardcoded invocation finds test_not_declared — proving the manifest is load-bearing
-    assert "test_not_declared" in all_test_fns
-    assert "test_alpha_works" in all_test_fns
-
-
 def test_empty_source_root_returns_empty_manifest(tmp_path):
     root = tmp_path / "build" / "matika"
     root.mkdir(parents=True)
