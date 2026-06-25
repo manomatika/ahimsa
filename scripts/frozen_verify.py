@@ -54,9 +54,20 @@ Two SCENARIOS, both required:
 Any failed assertion fails the build, dumping ~/matika/logs and the process
 output so the reason is visible directly in the CI job log.
 
+  LAYER 3 — applug-authored functional tests (--functional, or implied by
+    --source-root): after the single-boot tier-a/b block closes, the gate
+    discovers each applug's declared ``*_functional_tests.json`` from the pinned
+    source clones, groups the tests by applug, and for EACH applug boots a FRESH
+    app in a NEW clean HOME, mints a NEW session, runs only THAT applug's
+    declared tests, then tears down (reboot-per-applug). Failure for one applug
+    never aborts the others; ANY failed test fails the gate. WHO AUTHORS (the
+    applug) is separate from WHO INVOKES (this generic gate) — no isolation/
+    sandbox is implied.
+
 Usage:
     python frozen_verify.py --exe <frozen-binary> --scenario fresh|upgrade \
-        [--source-root build/matika] [--port 8000] [--timeout 90] [--browser]
+        [--source-root build/matika] [--functional] [--port 8000] \
+        [--timeout 90] [--browser]
 """
 
 from __future__ import annotations
@@ -493,6 +504,104 @@ def _dump_failure(app: BootedApp) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Layer-3 — applug-AUTHORED functional tests, GENERICALLY INVOKED (reboot model)
+#
+# WHO AUTHORS (each applug, via its *_functional_tests.json + module) is separate
+# from WHO INVOKES (this generic gate). The gate discovers the declared tests
+# from the PINNED SOURCE CLONES (source_root), groups them by applug, and for
+# EACH applug boots a FRESH frozen app in a NEW clean throwaway HOME, mints a NEW
+# authenticated session for THAT boot, runs only THAT applug's declared tests,
+# and tears the boot down before the next applug (reboot-per-applug, decided
+# model 2a). No isolation/sandbox is implied — this is plain build automation.
+#
+# Failure isolation: a failing boot, login, or test for one applug NEVER aborts
+# the others. Every result is collected; the phase fails the gate (non-zero exit
+# overall) if ANY test failed.
+#
+# Port: reuses the SAME port the single-boot tier-a/b phase used. The L3 boots
+# happen only AFTER that phase's `with BootedApp(...)` block has closed and its
+# process has been terminated/waited, so the port is free for each L3 boot
+# (which are themselves strictly sequential — one applug at a time).
+# ---------------------------------------------------------------------------
+
+def run_l3_functional(exe: str, port: int, timeout: int, source_root: str) -> bool:
+    """Run the Layer-3 applug-functional-test phase, REBOOT-PER-APPLUG.
+
+    Returns True if every declared functional test passed (or none were
+    declared), False if ANY test (or its applug's boot/login) failed. The caller
+    turns a False return into a non-zero overall exit.
+    """
+    print("=== LAYER 3: applug-authored functional tests (reboot-per-applug) ===")
+    manifest = screen_manifest.load_functional_test_manifest(source_root)
+    if not manifest.tests:
+        print("  L3 — no applug declared *_functional_tests.json; phase SKIPPED")
+        print("=== L3: PASS (no functional tests declared) ===\n")
+        return True
+
+    # Group the flat declared-test list by applug source so each applug gets one
+    # fresh boot covering exactly its own tests.
+    by_source: dict = {}
+    for decl in manifest.tests:
+        by_source.setdefault(decl.source, []).append(decl)
+
+    requests = _require_requests()
+    results = []  # list of (source, test_id, ok: bool, error: str | None)
+
+    for source in sorted(by_source):
+        decls = by_source[source]
+        print(f"  L3 — applug {source!r}: {len(decls)} functional test(s); "
+              f"booting a FRESH app in a clean HOME")
+        home = tempfile.mkdtemp(prefix=f"mm-verify-l3-{source}-")
+        app = BootedApp(exe, home, port, timeout)
+        applug_failed = False
+        try:
+            with app:
+                # A NEW authenticated session is minted PER boot — never reused
+                # across applugs/boots.
+                session = _login(requests, app.base)
+                for decl in decls:
+                    try:
+                        screen_manifest.invoke_functional_test(
+                            decl, source_root, app.base, session
+                        )
+                        results.append((source, decl.test_id, True, None))
+                        print(f"      · [{source}] {decl.test_id}: PASS")
+                    except Exception as exc:  # noqa: BLE001 - isolate per test
+                        applug_failed = True
+                        results.append((source, decl.test_id, False, str(exc)))
+                        print(f"      · [{source}] {decl.test_id}: FAIL — {exc}")
+                if applug_failed:
+                    _dump_failure(app)
+        except Exception as exc:  # noqa: BLE001 - boot/login failure for this applug
+            # Boot or login failed: mark every declared test for THIS applug as
+            # failed, dump its logs, and continue with the next applug.
+            applug_failed = True
+            _dump_failure(app)
+            for decl in decls:
+                results.append((source, decl.test_id, False,
+                                f"boot/login failed: {exc}"))
+            print(f"      · [{source}] boot/login FAILED — {exc}")
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+
+    # Per-applug, per-test PASS/FAIL summary.
+    print("  L3 summary:")
+    failed = [(s, t, e) for (s, t, ok, e) in results if not ok]
+    for source in sorted(by_source):
+        for (s, t, ok, e) in results:
+            if s == source:
+                print(f"    [{s}] {t}: {'PASS' if ok else 'FAIL'}"
+                      + (f" — {e}" if not ok else ""))
+    overall_ok = not failed
+    if overall_ok:
+        print(f"=== L3: PASS ({len(results)} test(s) across "
+              f"{len(by_source)} applug(s)) ===\n")
+    else:
+        print(f"=== L3: FAIL ({len(failed)}/{len(results)} test(s) failed) ===\n")
+    return overall_ok
+
+
 def _load_manifest(source_root):
     """Load the screen manifest from the pinned source clones (A1 arm), or skip.
 
@@ -529,11 +638,27 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=90)
     ap.add_argument("--browser", action="store_true",
                     help="also run tier (b) headless-browser checks (Playwright)")
+    ap.add_argument("--functional", action="store_true",
+                    help="run the Layer-3 applug-authored functional tests "
+                         "(reboot-per-applug). Also implied whenever --source-root "
+                         "is given (the functional manifest is discovered from it). "
+                         "Requires --source-root.")
     args = ap.parse_args()
 
     exe = os.path.abspath(args.exe)
     if not os.path.exists(exe):
         print(f"::error::frozen executable not found: {exe}")
+        return 1
+
+    # L3 runs when explicitly requested OR whenever a source-root is available
+    # (the functional manifest is discovered from the pinned source clones).
+    # --functional WITHOUT a source-root is a hard error: there is nothing to
+    # discover the functional manifest from.
+    l3_enabled = args.functional or bool(args.source_root)
+    if args.functional and not args.source_root:
+        print("::error::frozen-verify: --functional requires --source-root "
+              "(the functional-test manifest is discovered from the pinned "
+              "source clones; without it there is nothing to discover)")
         return 1
 
     try:
@@ -542,6 +667,14 @@ def main() -> int:
             scenario_fresh(exe, args.port, args.timeout, args.browser, manifest)
         else:
             scenario_upgrade(exe, args.port, args.timeout, args.browser, manifest)
+        # Layer-3 functional tests run AFTER the single-boot tier-a/b block has
+        # closed (so the port is free), on BOTH scenarios (rule 22, both install
+        # paths — CI invokes this once per scenario, so L3 runs on each path).
+        if l3_enabled:
+            if not run_l3_functional(exe, args.port, args.timeout, args.source_root):
+                print(f"::error::frozen-verify [{args.scenario}] L3 functional "
+                      f"phase FAILED")
+                return 1
     except screen_manifest.ScreenManifestError as exc:
         print(f"::error::frozen-verify [{args.scenario}] could not load the screen "
               f"manifest: {exc}")

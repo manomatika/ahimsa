@@ -323,8 +323,11 @@ jobs:
           # MANIFEST-DRIVEN: they discover and drive every declared screen from
           # the assembled *_screens.json (manomatika/ahimsa#82, A1 source-clone
           # arm) rather than hardcoding routes/markers.
-          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --scenario fresh   --browser --timeout 120
-          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --scenario upgrade --browser --timeout 120
+          # --functional explicitly enables the Layer-3 applug-functional-test
+          # phase (reboot-per-applug); it is also implied by --source-root, but
+          # we pass it explicitly so the gate's intent is unambiguous in the job.
+          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --functional --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --functional --scenario upgrade --browser --timeout 120
 
       - name: Build DMG (dmgbuild)
         shell: bash
@@ -617,8 +620,11 @@ jobs:
           # MANIFEST-DRIVEN: they discover and drive every declared screen from
           # the assembled *_screens.json (manomatika/ahimsa#82, A1 source-clone
           # arm) rather than hardcoding routes/markers.
-          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --scenario fresh   --browser --timeout 120
-          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --scenario upgrade --browser --timeout 120
+          # --functional explicitly enables the Layer-3 applug-functional-test
+          # phase (reboot-per-applug); it is also implied by --source-root, but
+          # we pass it explicitly so the gate's intent is unambiguous in the job.
+          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --functional --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --functional --scenario upgrade --browser --timeout 120
 
       - name: Build DMG (dmgbuild)
         shell: bash
@@ -902,8 +908,11 @@ jobs:
           # MANIFEST-DRIVEN: they discover and drive every declared screen from
           # the assembled *_screens.json (manomatika/ahimsa#82, A1 source-clone
           # arm) rather than hardcoding routes/markers.
-          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --scenario fresh   --browser --timeout 120
-          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --scenario upgrade --browser --timeout 120
+          # --functional explicitly enables the Layer-3 applug-functional-test
+          # phase (reboot-per-applug); it is also implied by --source-root, but
+          # we pass it explicitly so the gate's intent is unambiguous in the job.
+          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --functional --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "$EXE" --source-root build/matika --functional --scenario upgrade --browser --timeout 120
 
       - name: Build Windows installer (Inno Setup)
         shell: cmd
@@ -1001,13 +1010,71 @@ jobs:
           product_name = app["product_name"]
           product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
           product_ver  = app["version"]
+          # Mirror the build-* jobs: surface the recipe's pinned matika repo+tag
+          # so install-verify can side-clone the SAME pinned sources for the
+          # manifest-driven L2 (tier-a/b) + L3 functional-test discovery. The
+          # INSTALLED artifact stays under test (--exe); manifest/test discovery
+          # comes from the pinned source clone (Option-3 source-root fork,
+          # tag-pinned matching the build job).
+          matika_repo  = r["matika"]["repo"]
+          matika_tag   = r["matika"]["tag"]
+          if not matika_repo.startswith("http"):
+              matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
           with open(out, "a") as f:
               f.write(f"product_name={product_name}\n")
               f.write(f"product_slug={product_slug}\n")
               f.write(f"product_version={product_ver}\n")
+              f.write(f"matika_repo={matika_repo}\n")
+              f.write(f"matika_tag={matika_tag}\n")
           print(f"Product  : {product_name} v{product_ver}")
           print(f"Slug     : {product_slug}")
+          print(f"Matika   : {matika_tag}")
+          PYEOF
+
+      - name: Configure git credentials for GitHub App token
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
+
+      - name: Clone Matika at declared version (Option-3 source-root for manifest discovery)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Option-3 source-root fork: install-verify tests the INSTALLED
+          # artifact (--exe) but discovers the screen + functional-test manifests
+          # from a side-clone of the SAME pinned sources the build job used
+          # (tag-pinned matching). The L3 functional-test .py code is read ONLY
+          # from this clone — it is NEVER bundled into the product artifact.
+          MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
+          MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
+          echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
+          git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
+
+      - name: Clone AppLugs into build/matika/plugins/
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          for plug in r["applugs"]:
+              repo = plug["repo"]
+              if not repo.startswith("http"):
+                  repo = "https://" + repo
+              tag  = plug["tag"]
+              name = plug["name"]
+              dest = f"build/matika/plugins/{name}"
+              print(f"Cloning {name} @ {tag} from {repo} -> {dest}")
+              subprocess.run(
+                  ["git", "clone", "--depth", "1", "--branch", tag, repo, dest],
+                  check=True,
+              )
           PYEOF
 
       - name: Download DMG artifact
@@ -1045,16 +1112,17 @@ jobs:
           # The --exe flag is the "equivalent" path override described in #81 §5:
           # the same script serves both freeze-dir and installed-dir runs by
           # passing a different --exe value.
-          # NOTE (manomatika/ahimsa#82 / A1 seam): no --source-root here. The
-          # install-verify jobs have only the INSTALLED artifact (no build/matika
-          # source clone), so the per-screen manifest drive comes from the
-          # INSTALLED-DISK arm of the hybrid read — manomatika/ahimsa#83 (A2),
-          # which will pass the installed bundle's screen tree as --source-root.
-          # Until then these runs still boot, capture [ROUTES:...], and (upgrade)
-          # assert the stale-plugin refresh; the build-* jobs above exercise the
-          # full manifest-driven tier-a/b on all three OS targets.
-          python scripts/frozen_verify.py --exe "${EXE}" --scenario fresh   --browser --timeout 120
-          python scripts/frozen_verify.py --exe "${EXE}" --scenario upgrade --browser --timeout 120
+          # Option-3 source-root fork (L3 gate integration): --source-root points
+          # the harness at the side-cloned PINNED sources (build/matika core +
+          # plugins/*) so the manifest-driven L2 (tier-a/b) checks AND the L3
+          # applug-functional-test phase run against the INSTALLED artifact under
+          # --exe, with screen/test DISCOVERY from the pinned clone (tag-pinned,
+          # matching the build job). --functional explicitly enables the Layer-3
+          # reboot-per-applug phase. The installed-disk manifest arm (A2,
+          # manomatika/ahimsa#83) and the route-vs-manifest gate (A3, #84) remain
+          # distinct follow-on items — they are not this wiring.
+          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario upgrade --browser --timeout 120
 
   # ---------------------------------------------------------------------------
   # INSTALL-VERIFY — macOS Intel (macos-15-intel)
@@ -1111,13 +1179,71 @@ jobs:
           product_name = app["product_name"]
           product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
           product_ver  = app["version"]
+          # Mirror the build-* jobs: surface the recipe's pinned matika repo+tag
+          # so install-verify can side-clone the SAME pinned sources for the
+          # manifest-driven L2 (tier-a/b) + L3 functional-test discovery. The
+          # INSTALLED artifact stays under test (--exe); manifest/test discovery
+          # comes from the pinned source clone (Option-3 source-root fork,
+          # tag-pinned matching the build job).
+          matika_repo  = r["matika"]["repo"]
+          matika_tag   = r["matika"]["tag"]
+          if not matika_repo.startswith("http"):
+              matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
           with open(out, "a") as f:
               f.write(f"product_name={product_name}\n")
               f.write(f"product_slug={product_slug}\n")
               f.write(f"product_version={product_ver}\n")
+              f.write(f"matika_repo={matika_repo}\n")
+              f.write(f"matika_tag={matika_tag}\n")
           print(f"Product  : {product_name} v{product_ver}")
           print(f"Slug     : {product_slug}")
+          print(f"Matika   : {matika_tag}")
+          PYEOF
+
+      - name: Configure git credentials for GitHub App token
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
+
+      - name: Clone Matika at declared version (Option-3 source-root for manifest discovery)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Option-3 source-root fork: install-verify tests the INSTALLED
+          # artifact (--exe) but discovers the screen + functional-test manifests
+          # from a side-clone of the SAME pinned sources the build job used
+          # (tag-pinned matching). The L3 functional-test .py code is read ONLY
+          # from this clone — it is NEVER bundled into the product artifact.
+          MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
+          MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
+          echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
+          git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
+
+      - name: Clone AppLugs into build/matika/plugins/
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          for plug in r["applugs"]:
+              repo = plug["repo"]
+              if not repo.startswith("http"):
+                  repo = "https://" + repo
+              tag  = plug["tag"]
+              name = plug["name"]
+              dest = f"build/matika/plugins/{name}"
+              print(f"Cloning {name} @ {tag} from {repo} -> {dest}")
+              subprocess.run(
+                  ["git", "clone", "--depth", "1", "--branch", tag, repo, dest],
+                  check=True,
+              )
           PYEOF
 
       - name: Download DMG artifact
@@ -1144,16 +1270,17 @@ jobs:
             exit 1
           fi
           python scripts/smoke_launch.py --exe "${EXE}" --expect-plugin eyerate --timeout 90
-          # NOTE (manomatika/ahimsa#82 / A1 seam): no --source-root here. The
-          # install-verify jobs have only the INSTALLED artifact (no build/matika
-          # source clone), so the per-screen manifest drive comes from the
-          # INSTALLED-DISK arm of the hybrid read — manomatika/ahimsa#83 (A2),
-          # which will pass the installed bundle's screen tree as --source-root.
-          # Until then these runs still boot, capture [ROUTES:...], and (upgrade)
-          # assert the stale-plugin refresh; the build-* jobs above exercise the
-          # full manifest-driven tier-a/b on all three OS targets.
-          python scripts/frozen_verify.py --exe "${EXE}" --scenario fresh   --browser --timeout 120
-          python scripts/frozen_verify.py --exe "${EXE}" --scenario upgrade --browser --timeout 120
+          # Option-3 source-root fork (L3 gate integration): --source-root points
+          # the harness at the side-cloned PINNED sources (build/matika core +
+          # plugins/*) so the manifest-driven L2 (tier-a/b) checks AND the L3
+          # applug-functional-test phase run against the INSTALLED artifact under
+          # --exe, with screen/test DISCOVERY from the pinned clone (tag-pinned,
+          # matching the build job). --functional explicitly enables the Layer-3
+          # reboot-per-applug phase. The installed-disk manifest arm (A2,
+          # manomatika/ahimsa#83) and the route-vs-manifest gate (A3, #84) remain
+          # distinct follow-on items — they are not this wiring.
+          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario upgrade --browser --timeout 120
 
   # ---------------------------------------------------------------------------
   # INSTALL-VERIFY — Windows x86_64
@@ -1214,13 +1341,71 @@ jobs:
           product_name = app["product_name"]
           product_slug = re.sub(r"[^a-z0-9]+", "-", product_name.lower()).strip("-")
           product_ver  = app["version"]
+          # Mirror the build-* jobs: surface the recipe's pinned matika repo+tag
+          # so install-verify can side-clone the SAME pinned sources for the
+          # manifest-driven L2 (tier-a/b) + L3 functional-test discovery. The
+          # INSTALLED artifact stays under test (--exe); manifest/test discovery
+          # comes from the pinned source clone (Option-3 source-root fork,
+          # tag-pinned matching the build job).
+          matika_repo  = r["matika"]["repo"]
+          matika_tag   = r["matika"]["tag"]
+          if not matika_repo.startswith("http"):
+              matika_repo = "https://" + matika_repo
           out = os.environ["GITHUB_OUTPUT"]
           with open(out, "a") as f:
               f.write(f"product_name={product_name}\n")
               f.write(f"product_slug={product_slug}\n")
               f.write(f"product_version={product_ver}\n")
+              f.write(f"matika_repo={matika_repo}\n")
+              f.write(f"matika_tag={matika_tag}\n")
           print(f"Product  : {product_name} v{product_ver}")
           print(f"Slug     : {product_slug}")
+          print(f"Matika   : {matika_tag}")
+          PYEOF
+
+      - name: Configure git credentials for GitHub App token
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
+
+      - name: Clone Matika at declared version (Option-3 source-root for manifest discovery)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Option-3 source-root fork: install-verify tests the INSTALLED
+          # artifact (--exe) but discovers the screen + functional-test manifests
+          # from a side-clone of the SAME pinned sources the build job used
+          # (tag-pinned matching). The L3 functional-test .py code is read ONLY
+          # from this clone — it is NEVER bundled into the product artifact.
+          MATIKA_REPO="${{ steps.recipe_info.outputs.matika_repo }}"
+          MATIKA_TAG="${{ steps.recipe_info.outputs.matika_tag }}"
+          echo "Cloning Matika $MATIKA_TAG from $MATIKA_REPO"
+          git clone --depth 1 --branch "$MATIKA_TAG" "$MATIKA_REPO" build/matika
+
+      - name: Clone AppLugs into build/matika/plugins/
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess
+          path = os.environ["RECIPE_PATH"]
+          with open(path) as f:
+              r = json.load(f)
+          for plug in r["applugs"]:
+              repo = plug["repo"]
+              if not repo.startswith("http"):
+                  repo = "https://" + repo
+              tag  = plug["tag"]
+              name = plug["name"]
+              dest = f"build/matika/plugins/{name}"
+              print(f"Cloning {name} @ {tag} from {repo} -> {dest}")
+              subprocess.run(
+                  ["git", "clone", "--depth", "1", "--branch", tag, repo, dest],
+                  check=True,
+              )
           PYEOF
 
       - name: Download installer EXE artifact
@@ -1263,13 +1448,17 @@ jobs:
           if errorlevel 1 exit /b 1
           REM Feature-level checks on both install paths against the INSTALLED exe.
           REM The --exe flag is the "equivalent" installed-path override (ahimsa#81 §5).
-          REM NOTE (manomatika/ahimsa#82 / A1 seam): no --source-root here — the
-          REM installed-disk manifest read is manomatika/ahimsa#83 (A2). These runs
-          REM still boot, capture [ROUTES:...], and assert the upgrade refresh; the
-          REM build-windows job exercises the full manifest-driven tier-a/b.
-          python scripts/frozen_verify.py --exe "%EXE%" --scenario fresh   --browser --timeout 120
+          REM Option-3 source-root fork (L3 gate integration): --source-root points
+          REM the harness at the side-cloned PINNED sources (build\matika core +
+          REM plugins\*) so the manifest-driven L2 (tier-a/b) checks AND the L3
+          REM applug-functional-test phase run against the INSTALLED %EXE%, with
+          REM discovery from the pinned clone (tag-pinned, matching the build job).
+          REM --functional explicitly enables the Layer-3 reboot-per-applug phase.
+          REM The installed-disk manifest arm (A2, manomatika/ahimsa#83) and the
+          REM route-vs-manifest gate (A3, #84) remain distinct follow-on items.
+          python scripts/frozen_verify.py --exe "%EXE%" --source-root build/matika --functional --scenario fresh   --browser --timeout 120
           if errorlevel 1 exit /b 1
-          python scripts/frozen_verify.py --exe "%EXE%" --scenario upgrade --browser --timeout 120
+          python scripts/frozen_verify.py --exe "%EXE%" --source-root build/matika --functional --scenario upgrade --browser --timeout 120
           if errorlevel 1 exit /b 1
 
   # ---------------------------------------------------------------------------

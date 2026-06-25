@@ -36,6 +36,15 @@ ISS_FILE = REPO_ROOT / "installer" / "windows_installer.iss"
 # foundation. The release job is excluded — it has no build steps.
 BUILD_JOBS = ["build-macos-arm", "build-macos-intel", "build-windows"]
 MACOS_BUILD_JOBS = ["build-macos-arm", "build-macos-intel"]
+# install-verify jobs re-run the gate against the INSTALLED artifact. The L3
+# gate integration adds an Option-3 source-root fork to each: a side-clone of the
+# pinned sources (matika core + applugs) supplies the screen + functional-test
+# manifests while the installed binary stays under --exe.
+INSTALL_VERIFY_JOBS = [
+    "install-verify-macos-arm",
+    "install-verify-macos-intel",
+    "install-verify-windows",
+]
 
 
 @pytest.fixture(scope="module")
@@ -512,6 +521,21 @@ def test_build_job_runs_feature_verification(workflow, job_name):
 
 
 @pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_build_job_enables_l3_functional_phase(workflow, job_name):
+    """Each build job must explicitly enable the Layer-3 functional phase.
+
+    --source-root build/matika already pointed the harness at the pinned source
+    clones for the L2 manifest drive; --functional now explicitly turns on the
+    L3 applug-functional-test phase (reboot-per-applug) at the build gate.
+    """
+    run = _feature_verify_step(workflow, job_name)["run"]
+    assert "--source-root build/matika" in run
+    assert "--functional" in run, (
+        f"{job_name} must pass --functional to enable the L3 functional phase"
+    )
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
 def test_feature_verification_covers_both_install_paths(workflow, job_name):
     """Both the fresh AND the upgrade-over-stale scenarios must be exercised."""
     run = _feature_verify_step(workflow, job_name)["run"]
@@ -575,3 +599,74 @@ def test_pyinstaller_bundle_assertion_step_exists(workflow, job_name):
         f"{job_name} must have an 'Assert PyInstaller bundle matches product "
         f"identity' step between Run PyInstaller and the DMG/installer step"
     )
+
+
+# ---------------------------------------------------------------------------
+# install-verify: Option-3 source-root fork for the L3 gate integration.
+# Each install-verify job tests the INSTALLED artifact (--exe) but discovers the
+# screen + functional-test manifests from a side-clone of the SAME pinned
+# sources the build job used (tag-pinned matching), so the manifest-driven L2
+# tier-a/b checks AND the L3 applug-functional-test phase run there too.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("job_name", INSTALL_VERIFY_JOBS)
+def test_install_verify_recipe_info_emits_matika_repo_and_tag(workflow, job_name):
+    """recipe_info must surface matika repo+tag so the side-clone can be pinned."""
+    runs = _job_run_blocks(workflow["jobs"][job_name])
+    assert 'r["matika"]["repo"]' in runs, (
+        f"{job_name} recipe_info must read the recipe's matika.repo"
+    )
+    assert 'r["matika"]["tag"]' in runs, (
+        f"{job_name} recipe_info must read the recipe's matika.tag"
+    )
+    assert "matika_repo=" in runs and "matika_tag=" in runs, (
+        f"{job_name} recipe_info must emit matika_repo and matika_tag outputs"
+    )
+
+
+@pytest.mark.parametrize("job_name", INSTALL_VERIFY_JOBS)
+def test_install_verify_clones_pinned_sources(workflow, job_name):
+    """Each install-verify job must side-clone matika + applugs at the pinned tag."""
+    job = workflow["jobs"][job_name]
+    names = _step_names(job)
+    runs = _job_run_blocks(job)
+    assert any("Clone Matika" in n for n in names), (
+        f"{job_name} must clone matika for the source-root fork"
+    )
+    assert any("Clone AppLugs" in n for n in names), (
+        f"{job_name} must clone the applugs into build/matika/plugins/"
+    )
+    assert any("Configure git credentials" in n for n in names), (
+        f"{job_name} must set up git credentials before cloning"
+    )
+    # Clone matika at the recipe's pinned tag into build/matika (tag-pinned
+    # matching the build job — same provenance arm).
+    assert 'git clone --depth 1 --branch "$MATIKA_TAG"' in runs
+    assert "build/matika" in runs
+    assert "build/matika/plugins/" in runs
+    # Applugs pinned by their own explicit tag, mirroring the build jobs.
+    assert 'plug["tag"]' in runs
+
+
+@pytest.mark.parametrize("job_name", INSTALL_VERIFY_JOBS)
+def test_install_verify_runs_l3_against_installed_exe(workflow, job_name):
+    """frozen_verify in install-verify must keep --exe on the installed binary
+    AND add --source-root build/matika + --functional (the Option-3 fork)."""
+    run = _feature_verify_step(workflow, job_name)["run"]
+    assert "--source-root build/matika" in run, (
+        f"{job_name} must pass --source-root build/matika (the side-cloned "
+        f"pinned sources) for manifest + functional-test discovery"
+    )
+    assert "--functional" in run, (
+        f"{job_name} must pass --functional to enable the L3 phase"
+    )
+    # The installed artifact stays under test: --exe must still point at the
+    # mounted/installed binary, never at build/matika.
+    if job_name == "install-verify-windows":
+        assert '--exe "%EXE%"' in run
+    else:
+        assert '--exe "${EXE}"' in run
+    # Both install paths (fresh + upgrade-over-stale) must still run (rule 22).
+    assert "--scenario fresh" in run
+    assert "--scenario upgrade" in run
