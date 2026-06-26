@@ -24,12 +24,19 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import screen_manifest  # noqa: E402  (local sibling module)
 
 # How long to wait for a marker / element before deciding it is absent.
 _MARKER_TIMEOUT_MS = 8_000
+
+# How long to wait between value-polls in _assert_value. The DOM value of a
+# field may only settle after an awaited fetch round-trip (e.g. eyerate's
+# admin-securities.js fills #field-symbol after /lookup resolves), so the value
+# assertion must poll like Playwright's web-first matchers rather than read once.
+_POLL_INTERVAL_MS = 100
 
 
 class BrowserCheckError(RuntimeError):
@@ -90,12 +97,16 @@ class BrowserScreenExecutor(screen_manifest.ScreenExecutor):
     that ``markers`` be present, leaving verification semantics to the gate.)
     """
 
-    def __init__(self, page, base: str):
+    def __init__(self, page, base: str, timeout_error=None):
         self.page = page
         self.base = base
         self._route = "(none navigated)"
-        from playwright.sync_api import TimeoutError as _PWTimeout
-        self._timeout_error = _PWTimeout
+        if timeout_error is None:
+            from playwright.sync_api import TimeoutError as _PWTimeout
+            timeout_error = _PWTimeout
+        # Injectable so the polling/assert logic is unit-testable against a fake
+        # page without a real Playwright/Chromium install in the dev env.
+        self._timeout_error = timeout_error
 
     def run_step(self, step: screen_manifest.Step) -> None:
         verb, target, value = step.verb, step.target, step.value
@@ -138,21 +149,38 @@ class BrowserScreenExecutor(screen_manifest.ScreenExecutor):
         print(f"      · [browser] assert_absent {selector!r} OK")
 
     def _assert_value(self, selector: str, expected) -> None:
+        # First make sure the field exists at all; absence is a distinct, loud
+        # failure from "present but never holds the expected value".
         try:
             self.page.wait_for_selector(selector, state="attached",
                                         timeout=_MARKER_TIMEOUT_MS)
-            actual = self.page.input_value(selector)
         except self._timeout_error:
             raise BrowserCheckError(
                 f"assert_value failed on {self._route}: selector {selector!r} "
                 f"not found"
             )
-        if (expected or "").upper() not in (actual or "").upper():
-            raise BrowserCheckError(
-                f"assert_value failed on {self._route}: selector {selector!r} "
-                f"value {actual!r} does not contain expected {expected!r}"
-            )
-        print(f"      · [browser] assert_value {selector!r} contains {expected!r} OK")
+        # Web-first polling: the value may be populated asynchronously (only
+        # after an awaited fetch round-trip completes), so a single immediate
+        # read races the fill and spuriously sees ''. Poll the live value until
+        # it contains the expected substring or the timeout elapses — mirroring
+        # the wait-based discipline _assert_present already uses.
+        needle = (expected or "").upper()
+        deadline = time.monotonic() + _MARKER_TIMEOUT_MS / 1000.0
+        actual = None
+        while True:
+            actual = self.page.input_value(selector)
+            if needle in (actual or "").upper():
+                print(f"      · [browser] assert_value {selector!r} contains "
+                      f"{expected!r} OK")
+                return
+            if time.monotonic() >= deadline:
+                break
+            self.page.wait_for_timeout(_POLL_INTERVAL_MS)
+        raise BrowserCheckError(
+            f"assert_value failed on {self._route}: selector {selector!r} "
+            f"value {actual!r} does not contain expected {expected!r} after "
+            f"{_MARKER_TIMEOUT_MS}ms"
+        )
 
     def assert_markers(self, markers) -> None:
         found = None
