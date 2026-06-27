@@ -16,6 +16,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Check matika out alongside ahimsa so the cross-repo schema-parity test
+      # (tests/test_screen_schema_parity.py, relocated here per
+      # manomatika/matika#105) can read matika's CANONICAL schema constants and
+      # assert ahimsa's MIRROR matches. matika is public, so no token is needed.
+      # MATIKA_SRC (set on the pytest step below) points the test at this clone.
+      - name: Checkout matika source (cross-repo parity)
+        uses: actions/checkout@v6
+        with:
+          repository: manomatika/matika
+          path: matika-src
+
       - name: Mint GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -43,6 +54,8 @@ jobs:
       - name: Run full test suite (unit + invocation + integration)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Point the relocated cross-repo parity test at the matika checkout.
+          MATIKA_SRC: ${{ github.workspace }}/matika-src
         run: uv run pytest tests/
 
       - name: Fetch reference recipe from manomatika/manomatika
