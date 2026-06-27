@@ -6,13 +6,14 @@ log. It owns the build/validation *mechanism* and the recipe *schema* — not th
 product, not the recipes, not the audit-log content. See [docs/architecture.md](docs/architecture.md)
 for the full ecosystem model, engine detail, architecture decisions, and workflow positioning.
 
+<!-- COMMON:BEGIN (generated from manomatika/docs/CLAUDE_COMMON.md — do not edit between these markers) -->
 ## Working Style & Discipline
 
 This section captures the standing working rules across the manomatika ecosystem. **CLAUDE.md is authoritative for how a fresh Claude Code instance should operate in this repo; keep it current as practices evolve.** The terminal milestone of every release is `Documentation & Release Readiness`, which includes auditing and updating every CLAUDE.md against what actually shipped.
 
 ### Documentation integrity
 
-CLAUDE.md must never knowingly contain stale information. Whenever CLAUDE.md is edited or regenerated, every factual claim about this repo (workflow/job status, ownership boundaries, file locations, build/release state) must be verified against the actual current repo state before being written. Stale claims are defects. When a claim cannot be verified, omit it rather than guess.
+CLAUDE.md must never knowingly contain stale information. Whenever CLAUDE.md is edited or regenerated, every factual claim about this repo (workflow/job status, ownership boundaries, file locations, build/release state) must be verified against the actual current repo state before being written. Stale claims are defects. When a claim cannot be verified, omit it rather than guess. This integrity requirement applies to all docs in this repo, not just CLAUDE.md. TARGET-vs-CURRENT divergence (where the intended model differs from what the code/repo physically contains today) must be stated honestly, not papered over.
 
 ### Collaboration model
 
@@ -37,7 +38,7 @@ CLAUDE.md must never knowingly contain stale information. Whenever CLAUDE.md is 
 - **Regression tests are required for every fix.** A bug fix that doesn't include a test that would have caught the bug isn't done.
 - **All tests must RUN IN FULL and pass — 100% clean.** Every affected repo's COMPLETE suite must RUN with nothing excluded, deselected, skipped, or marked integration-only, and pass: 0 failed / 0 skipped / 0 xfail / 0 deselected / 0 warnings. No test may be excluded or filtered and no warning suppressed without the product owner's explicit, per-case approval recorded as a documented rule variation.
 - **Full-suite, every change, everywhere — 100% clean (standing rule 21).** ANY code change, in ANY repo, requires the COMPLETE unit-test suite of every affected repo (and any repo whose behavior could be impacted) to RUN IN FULL — nothing excluded, deselected, skipped, or marked integration-only — and pass 100%: 0 failed / 0 skipped / 0 xfail / 0 deselected / 0 warnings. Eliminate every warning at its ROOT (fix the code or bump the dependency); never blanket-suppress with a `filterwarnings` / `-W ignore` / `-m 'not …'` filter. Use each repo's correct test environment (the uv-managed `.venv`) so a green run is never an env artifact. A change is not done until every suite is 100% clean.
-- **Escaped-bug regression mandate (standing rule 22).** Any bug that reaches CI, an rc, or install/runtime testing without being caught by the suite MUST, as part of its fix, gain a regression test that would have caught it — added at the layer where it escaped (unit/integration for logic gaps; a feature/E2E check against the FROZEN, pinned artifact for product-behavior gaps). The fix is not done until that test exists, fails without the fix, and passes with it.
+- **Escaped-bug regression mandate (standing rule 22).** Any bug that reaches CI, an rc, or install/runtime testing without being caught by the suite MUST, as part of its fix, gain a regression test that would have caught it — added at the layer where it escaped (unit/integration for logic gaps; a feature/E2E check against the FROZEN, pinned artifact for product-behavior gaps). The fix is not done until that test exists, fails without the fix, and passes with it. Product-behavior regressions must be exercised against the frozen artifact on BOTH install paths (fresh install AND upgrade over a prior install), since the upgrade path is where the stale-plugin regression escaped.
 - **Never weaken or disable security / correctness checks** (CSRF, permission, auth, validation) as a workaround. If a check is producing a wrong answer, fix the call site to satisfy it correctly — never bypass.
 
 ### Repository ecosystem
@@ -69,6 +70,7 @@ CLAUDE.md must never knowingly contain stale information. Whenever CLAUDE.md is 
 - **Put prompts and commands in code blocks** so the user can one-tap copy them.
 - The user is on **macOS** and uses **Ghostty** and **tmux** for terminal work (shell defaults to zsh). The user also runs a **Dell Latitude** (64 GB RAM, no high-performance GPU) for local models via **Ollama**, currently favoring **qwen**. All configs are managed with **chezmoi**; any change to any config must follow chezmoi best practice and standards. chezmoi usage is captured in a separate handoff file, `chezmoi-dotfiles-handoff.md`. The user edits in **neovim**, and may also use **VSC**.
 - The user is **expert in software architecture and engineering, novice in git/GitHub specifics.** When git or `gh` commands appear in plans or output, explain plainly what they do, what they touch, and what the user will see.
+<!-- COMMON:END -->
 
 ## Recipes (engine consumes; authority is `manomatika/manomatika`)
 
