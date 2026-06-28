@@ -22,14 +22,18 @@ tests/                    — pytest test suite
   test_config_precedence.py — walk-up and --config precedence matrix
   test_build_workflow.py  — build.yml workflow assertions
   test_frozen_verify.py   — unit tests for the frozen-feature verification harness
+  test_browser_verify.py  — unit tests for the tier-b Playwright verb executor
+  test_screen_manifest.py — unit tests for screen/functional-test discovery, parse + invoke
+  test_screen_schema_parity.py — asserts ahimsa's mirrored screen-schema constants match matika's canon
   test_github_resolver_integration.py — real-network integration tier (runs in the full suite)
   fixtures/               — per-scenario recipe + config fixtures
 scripts/
   build_standalone.py     — build orchestration (stubbed, not part of package)
   make_dmg.py / _dmg_settings.py — DMG wrapper invoked by build.yml (macOS)
   smoke_launch.py         — boots the frozen app and asserts it serves (build.yml smoke gate)
-  frozen_verify.py        — tier-a authenticated-HTTP feature checks against the frozen artifact (fresh + upgrade scenarios)
-  browser_verify.py       — tier-b headless-Playwright feature checks (driven via frozen_verify --browser)
+  frozen_verify.py        — the feature-gate driver: L2 tier-a (authenticated HTTP) + tier-b (Playwright, --browser) and L3 (--functional, reboot-per-applug) against the frozen artifact (fresh + upgrade scenarios)
+  browser_verify.py       — tier-b headless-Playwright verb executor (driven via frozen_verify --browser)
+  screen_manifest.py      — screen/functional-test discovery, parse + invoke (mechanism only; mirrors matika's canonical schema constants)
   render_releases_md.py   — RELEASES.md render entry point (used by build.yml refresh job)
 installer/                — windows_installer.iss (Inno Setup script for the Windows EXE)
 docs/                     — release-notes/<tag>.md per-tag GitHub-release bodies
