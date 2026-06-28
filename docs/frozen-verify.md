@@ -10,11 +10,13 @@ gate is **pure build automation** — there is no sandbox, no isolation, and no
 trust dimension (see CLAUDE.md *AppLug trust, test posture & the three-layer
 testing model*).
 
-**Status: BUILT, not yet PROVEN.** The gate is implemented, unit-covered, and
-wired into `build.yml` (L1 in component suites + L2 structural + L3 functional, on
-both scenarios and both install paths). It has **not yet** been driven red→green
-against a live frozen artifact on a real dispatch — that end-to-end proof is A5
-(pending). Read the below as the built mechanism, not as a proven live run.
+**Status: BUILT and PROVEN green end-to-end.** The gate is implemented,
+unit-covered, and wired into `build.yml` (L1 in component suites + L2 structural +
+L3 functional, on both scenarios and both install paths). It has been driven green
+against a live frozen artifact on a real dispatch (A5 — DONE) across all three
+platforms (`macos-14` arm64, `macos-15-intel`, `windows-latest`), both install
+arms, and fresh + upgrade scenarios (tier-a 20 screens, tier-b 17 markers, L3
+eyerate 3/3 — all non-SKIPPED).
 
 Three scripts, run by every `build.yml` build job after the freeze (and again by
 the install-verify jobs against the installed artifact):
