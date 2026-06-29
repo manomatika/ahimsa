@@ -224,6 +224,43 @@ jobs:
           echo "Resolved matika_sha=${MATIKA_SHA}"
           echo "Resolved applug_shas=${APPLUG_SHAS}"
 
+      - name: Strip dev scaffolding from applug payloads
+        shell: bash
+        run: |
+          echo "Stripping dev scaffolding from applug payloads (post-SHA-resolution)..."
+          for plug_dir in build/matika/plugins/*/; do
+            [ -d "$plug_dir" ] || continue
+            name="$(basename "$plug_dir")"
+            dropped=""
+            for entry in .git .github .husky .gitattributes .gitignore node_modules tests; do
+              target="${plug_dir}${entry}"
+              if [ -e "$target" ] || [ -L "$target" ]; then
+                rm -rf "$target"
+                dropped="${dropped}${entry} "
+              fi
+            done
+            if [ -n "$dropped" ]; then
+              echo "INFO: stripped from ${name}: ${dropped}"
+            else
+              echo "INFO: ${name} had no scaffolding to strip"
+            fi
+          done
+          # Verify: fail loud if any scaffolding leaked through
+          leaked=""
+          for plug_dir in build/matika/plugins/*/; do
+            [ -d "$plug_dir" ] || continue
+            name="$(basename "$plug_dir")"
+            for entry in .git .github .husky .gitattributes .gitignore node_modules tests; do
+              if [ -e "${plug_dir}${entry}" ]; then
+                leaked="${leaked}${name}/${entry} "
+              fi
+            done
+          done
+          if [ -n "$leaked" ]; then
+            echo "ERROR: scaffolding leaked into payload: ${leaked}"
+            exit 1
+          fi
+
       - name: Build frontend (npm)
         shell: bash
         working-directory: build/matika
@@ -564,6 +601,43 @@ jobs:
           echo "Resolved matika_sha=${MATIKA_SHA}"
           echo "Resolved applug_shas=${APPLUG_SHAS}"
 
+      - name: Strip dev scaffolding from applug payloads
+        shell: bash
+        run: |
+          echo "Stripping dev scaffolding from applug payloads (post-SHA-resolution)..."
+          for plug_dir in build/matika/plugins/*/; do
+            [ -d "$plug_dir" ] || continue
+            name="$(basename "$plug_dir")"
+            dropped=""
+            for entry in .git .github .husky .gitattributes .gitignore node_modules tests; do
+              target="${plug_dir}${entry}"
+              if [ -e "$target" ] || [ -L "$target" ]; then
+                rm -rf "$target"
+                dropped="${dropped}${entry} "
+              fi
+            done
+            if [ -n "$dropped" ]; then
+              echo "INFO: stripped from ${name}: ${dropped}"
+            else
+              echo "INFO: ${name} had no scaffolding to strip"
+            fi
+          done
+          # Verify: fail loud if any scaffolding leaked through
+          leaked=""
+          for plug_dir in build/matika/plugins/*/; do
+            [ -d "$plug_dir" ] || continue
+            name="$(basename "$plug_dir")"
+            for entry in .git .github .husky .gitattributes .gitignore node_modules tests; do
+              if [ -e "${plug_dir}${entry}" ]; then
+                leaked="${leaked}${name}/${entry} "
+              fi
+            done
+          done
+          if [ -n "$leaked" ]; then
+            echo "ERROR: scaffolding leaked into payload: ${leaked}"
+            exit 1
+          fi
+
       - name: Build frontend (npm)
         shell: bash
         working-directory: build/matika
@@ -902,6 +976,43 @@ jobs:
           echo "Resolved matika_sha=${MATIKA_SHA}"
           echo "Resolved applug_shas=${APPLUG_SHAS}"
 
+      - name: Strip dev scaffolding from applug payloads
+        shell: bash
+        run: |
+          echo "Stripping dev scaffolding from applug payloads (post-SHA-resolution)..."
+          for plug_dir in build/matika/plugins/*/; do
+            [ -d "$plug_dir" ] || continue
+            name="$(basename "$plug_dir")"
+            dropped=""
+            for entry in .git .github .husky .gitattributes .gitignore node_modules tests; do
+              target="${plug_dir}${entry}"
+              if [ -e "$target" ] || [ -L "$target" ]; then
+                rm -rf "$target"
+                dropped="${dropped}${entry} "
+              fi
+            done
+            if [ -n "$dropped" ]; then
+              echo "INFO: stripped from ${name}: ${dropped}"
+            else
+              echo "INFO: ${name} had no scaffolding to strip"
+            fi
+          done
+          # Verify: fail loud if any scaffolding leaked through
+          leaked=""
+          for plug_dir in build/matika/plugins/*/; do
+            [ -d "$plug_dir" ] || continue
+            name="$(basename "$plug_dir")"
+            for entry in .git .github .husky .gitattributes .gitignore node_modules tests; do
+              if [ -e "${plug_dir}${entry}" ]; then
+                leaked="${leaked}${name}/${entry} "
+              fi
+            done
+          done
+          if [ -n "$leaked" ]; then
+            echo "ERROR: scaffolding leaked into payload: ${leaked}"
+            exit 1
+          fi
+
       - name: Build frontend (npm)
         shell: bash
         working-directory: build/matika
@@ -1181,7 +1292,7 @@ jobs:
           # comes from the build job's emitted applug_shas JSON, keyed by applug
           # name — so the side-clone is byte-identical to what was frozen.
           python3 - <<'PYEOF'
-          import json, os, subprocess
+          import json, os, shutil, subprocess
           path = os.environ["RECIPE_PATH"]
           shas = json.loads(os.environ["APPLUG_SHAS"])
           with open(path) as f:
@@ -1198,6 +1309,16 @@ jobs:
               subprocess.run(["git", "-C", dest, "remote", "add", "origin", repo], check=True)
               subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", sha], check=True)
               subprocess.run(["git", "-C", dest, "checkout", "FETCH_HEAD"], check=True)
+              dropped = []
+              for entry in ['.git', '.github', '.husky', '.gitattributes', '.gitignore', 'node_modules', 'tests']:
+                  path = os.path.join(dest, entry)
+                  if os.path.isdir(path):
+                      shutil.rmtree(path)
+                      dropped.append(entry)
+                  elif os.path.isfile(path):
+                      os.remove(path)
+                      dropped.append(entry)
+              print(f"INFO: exported {name} @ {sha} -> {dest} (filtered: {' '.join(dropped) if dropped else 'none'})")
           PYEOF
 
       - name: Download DMG artifact
@@ -1356,7 +1477,7 @@ jobs:
           # comes from the build job's emitted applug_shas JSON, keyed by applug
           # name — so the side-clone is byte-identical to what was frozen.
           python3 - <<'PYEOF'
-          import json, os, subprocess
+          import json, os, shutil, subprocess
           path = os.environ["RECIPE_PATH"]
           shas = json.loads(os.environ["APPLUG_SHAS"])
           with open(path) as f:
@@ -1373,6 +1494,16 @@ jobs:
               subprocess.run(["git", "-C", dest, "remote", "add", "origin", repo], check=True)
               subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", sha], check=True)
               subprocess.run(["git", "-C", dest, "checkout", "FETCH_HEAD"], check=True)
+              dropped = []
+              for entry in ['.git', '.github', '.husky', '.gitattributes', '.gitignore', 'node_modules', 'tests']:
+                  path = os.path.join(dest, entry)
+                  if os.path.isdir(path):
+                      shutil.rmtree(path)
+                      dropped.append(entry)
+                  elif os.path.isfile(path):
+                      os.remove(path)
+                      dropped.append(entry)
+              print(f"INFO: exported {name} @ {sha} -> {dest} (filtered: {' '.join(dropped) if dropped else 'none'})")
           PYEOF
 
       - name: Download DMG artifact
@@ -1524,7 +1655,7 @@ jobs:
           # comes from the build job's emitted applug_shas JSON, keyed by applug
           # name — so the side-clone is byte-identical to what was frozen.
           python3 - <<'PYEOF'
-          import json, os, subprocess
+          import json, os, shutil, subprocess
           path = os.environ["RECIPE_PATH"]
           shas = json.loads(os.environ["APPLUG_SHAS"])
           with open(path) as f:
@@ -1541,6 +1672,16 @@ jobs:
               subprocess.run(["git", "-C", dest, "remote", "add", "origin", repo], check=True)
               subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin", sha], check=True)
               subprocess.run(["git", "-C", dest, "checkout", "FETCH_HEAD"], check=True)
+              dropped = []
+              for entry in ['.git', '.github', '.husky', '.gitattributes', '.gitignore', 'node_modules', 'tests']:
+                  path = os.path.join(dest, entry)
+                  if os.path.isdir(path):
+                      shutil.rmtree(path)
+                      dropped.append(entry)
+                  elif os.path.isfile(path):
+                      os.remove(path)
+                      dropped.append(entry)
+              print(f"INFO: exported {name} @ {sha} -> {dest} (filtered: {' '.join(dropped) if dropped else 'none'})")
           PYEOF
 
       - name: Download installer EXE artifact
