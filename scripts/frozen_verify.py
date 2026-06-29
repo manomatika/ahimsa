@@ -595,8 +595,9 @@ def assert_abrupt_kill_port_free(proc: "subprocess.Popen[bytes]", port: int) -> 
     time.sleep(1.0)
 
     def _try_bind(port_: int, elapsed_label: str) -> None:
+        # No SO_REUSEADDR: a listening server (uvicorn) holds the port even with REUSEADDR,
+        # and we want to detect that. A plain bind fails on a live listener.
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", port_))
         except OSError as exc:

@@ -754,6 +754,7 @@ class TestLifecycleAssertions:
         s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", test_port))
+            s.listen(1)  # must listen — bind-only isn't enough to block a plain bind on Linux
             with pytest.raises((AssertionError, OSError)):
                 fv.assert_abrupt_kill_port_free(MockProc(), test_port)
         finally:
