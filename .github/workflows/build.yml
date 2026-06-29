@@ -75,6 +75,7 @@ jobs:
     outputs:
       matika_sha: ${{ steps.shas.outputs.matika_sha }}
       applug_shas: ${{ steps.shas.outputs.applug_shas }}
+      matika_tag: ${{ steps.recipe_info.outputs.matika_tag }}
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
@@ -452,6 +453,7 @@ jobs:
     outputs:
       matika_sha: ${{ steps.shas.outputs.matika_sha }}
       applug_shas: ${{ steps.shas.outputs.applug_shas }}
+      matika_tag: ${{ steps.recipe_info.outputs.matika_tag }}
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
@@ -825,6 +827,7 @@ jobs:
     outputs:
       matika_sha: ${{ steps.shas.outputs.matika_sha }}
       applug_shas: ${{ steps.shas.outputs.applug_shas }}
+      matika_tag: ${{ steps.recipe_info.outputs.matika_tag }}
     env:
       RECIPE_PATH: ${{ inputs.recipe_path || 'recipes/reference-app/recipe.json' }}
 
@@ -1365,8 +1368,8 @@ jobs:
           # reboot-per-applug phase. The installed-disk manifest arm (A2,
           # manomatika/ahimsa#83) and the route-vs-manifest gate (A3, #84) remain
           # distinct follow-on items — they are not this wiring.
-          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario fresh   --browser --timeout 120
-          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario upgrade --browser --timeout 120
+          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario fresh   --browser --timeout 120 --matika-tag "${{ needs.build-macos-arm.outputs.matika_tag }}"
+          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario upgrade --browser --timeout 120 --matika-tag "${{ needs.build-macos-arm.outputs.matika_tag }}"
 
   # ---------------------------------------------------------------------------
   # INSTALL-VERIFY — macOS Intel (macos-15-intel)
@@ -1539,8 +1542,8 @@ jobs:
           # reboot-per-applug phase. The installed-disk manifest arm (A2,
           # manomatika/ahimsa#83) and the route-vs-manifest gate (A3, #84) remain
           # distinct follow-on items — they are not this wiring.
-          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario fresh   --browser --timeout 120
-          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario upgrade --browser --timeout 120
+          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario fresh   --browser --timeout 120 --matika-tag "${{ needs.build-macos-intel.outputs.matika_tag }}"
+          python scripts/frozen_verify.py --exe "${EXE}" --source-root build/matika --functional --scenario upgrade --browser --timeout 120 --matika-tag "${{ needs.build-macos-intel.outputs.matika_tag }}"
 
   # ---------------------------------------------------------------------------
   # INSTALL-VERIFY — Windows x86_64
@@ -1732,9 +1735,9 @@ jobs:
           REM --functional explicitly enables the Layer-3 reboot-per-applug phase.
           REM The installed-disk manifest arm (A2, manomatika/ahimsa#83) and the
           REM route-vs-manifest gate (A3, #84) remain distinct follow-on items.
-          python scripts/frozen_verify.py --exe "%EXE%" --source-root build/matika --functional --scenario fresh   --browser --timeout 120
+          python scripts/frozen_verify.py --exe "%EXE%" --source-root build/matika --functional --scenario fresh   --browser --timeout 120 --matika-tag "${{ needs.build-windows.outputs.matika_tag }}"
           if errorlevel 1 exit /b 1
-          python scripts/frozen_verify.py --exe "%EXE%" --source-root build/matika --functional --scenario upgrade --browser --timeout 120
+          python scripts/frozen_verify.py --exe "%EXE%" --source-root build/matika --functional --scenario upgrade --browser --timeout 120 --matika-tag "${{ needs.build-windows.outputs.matika_tag }}"
           if errorlevel 1 exit /b 1
 
   # ---------------------------------------------------------------------------

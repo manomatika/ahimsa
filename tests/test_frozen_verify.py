@@ -681,3 +681,117 @@ def test_main_threads_l3_seed(fv, tmp_path, monkeypatch):
         rc = fv.main()
     assert rc == 0
     assert captured["seed"] == 777
+
+
+class TestLifecycleAssertions:
+    def test_healthz_version_passes_matching_tag(self, fv, tmp_path, monkeypatch):
+        """assert_healthz_reachable_and_version passes when /healthz version matches tag."""
+        import json
+        import urllib.request
+        class MockResponse:
+            def __init__(self):
+                self.status = 200
+            def read(self):
+                return json.dumps({"product": "ManoMatika", "version": "0.0.4-rc.11", "status": "ok"}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: MockResponse())
+        fv.assert_healthz_reachable_and_version(8000, "v0.0.4-rc.11")
+
+    def test_healthz_version_fails_mismatched_tag(self, fv, monkeypatch):
+        """assert_healthz_reachable_and_version fails when versions don't match."""
+        import json, urllib.request
+        class MockResponse:
+            def read(self): return json.dumps({"product":"ManoMatika","version":"0.0.4-rc.7","status":"ok"}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: MockResponse())
+        with pytest.raises(AssertionError, match="version"):
+            fv.assert_healthz_reachable_and_version(8000, "v0.0.4-rc.11")
+
+    def test_healthz_fails_on_unreachable(self, fv, monkeypatch):
+        """assert_healthz_reachable_and_version fails when /healthz is unreachable."""
+        import urllib.request, urllib.error
+        def raise_urlerror(url, timeout=None):
+            raise urllib.error.URLError("connection refused")
+        monkeypatch.setattr(urllib.request, "urlopen", raise_urlerror)
+        with pytest.raises(AssertionError, match="Failed to probe"):
+            fv.assert_healthz_reachable_and_version(8000, "v0.0.4-rc.11")
+
+    def test_healthz_fails_on_wrong_product(self, fv, monkeypatch):
+        """assert_healthz_reachable_and_version fails when product != ManoMatika."""
+        import json, urllib.request
+        class MockResponse:
+            def read(self): return json.dumps({"product":"OtherApp","version":"0.0.4-rc.11","status":"ok"}).encode()
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: MockResponse())
+        with pytest.raises(AssertionError, match="product"):
+            fv.assert_healthz_reachable_and_version(8000, "v0.0.4-rc.11")
+
+    def test_abrupt_kill_port_free_passes_when_port_released(self, fv, tmp_path, monkeypatch):
+        """assert_abrupt_kill_port_free passes when port is freed after kill."""
+        import subprocess, time
+        class MockProc:
+            returncode = None
+            def kill(self): self.returncode = -9
+            def wait(self, timeout=None): pass
+            def poll(self): return self.returncode
+        # Port is not in use, so bind should succeed
+        fv.assert_abrupt_kill_port_free(MockProc(), 19999)  # unlikely-used port
+
+    def test_abrupt_kill_port_free_fails_when_port_held(self, fv, monkeypatch):
+        """assert_abrupt_kill_port_free fails when port is still in use after kill."""
+        import subprocess, socket as _socket, time
+        class MockProc:
+            returncode = None
+            def kill(self): self.returncode = -9
+            def wait(self, timeout=None): pass
+            def poll(self): return self.returncode
+        # Bind a socket on a test port to simulate the port still being held
+        test_port = 19998
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", test_port))
+            s.listen(1)  # must listen — bind-only isn't enough to block a plain bind on Linux
+            with pytest.raises((AssertionError, OSError)):
+                fv.assert_abrupt_kill_port_free(MockProc(), test_port)
+        finally:
+            s.close()
+
+    def test_double_launch_recovery_passes_on_exit_zero(self, fv, tmp_path, monkeypatch):
+        """assert_double_launch_recovery passes when second launch exits 0 with recovery log."""
+        import subprocess as sp
+        class FakeProc:
+            returncode = 0
+            def __init__(self): self._stdout = "port 8000 already held by a ManoMatika instance; focusing existing window\n"
+            def communicate(self, timeout=None): return self._stdout, None
+        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
+        monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+        fv.assert_double_launch_recovery("fake-exe", 8000, 30)
+
+    def test_double_launch_recovery_fails_on_nonzero_exit(self, fv, tmp_path, monkeypatch):
+        """assert_double_launch_recovery fails when second launch exits nonzero."""
+        import subprocess as sp
+        class FakeProc:
+            returncode = 1
+            def communicate(self, timeout=None): return "ERROR: port in use\n", None
+        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
+        monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+        with pytest.raises(AssertionError, match="exit"):
+            fv.assert_double_launch_recovery("fake-exe", 8000, 30)
+
+    def test_double_launch_recovery_fails_on_no_recovery_log(self, fv, tmp_path, monkeypatch):
+        """assert_double_launch_recovery fails when exit 0 but no recovery log line."""
+        import subprocess as sp
+        class FakeProc:
+            returncode = 0
+            def communicate(self, timeout=None): return "started server on port 8000\n", None
+        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
+        monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+        with pytest.raises(AssertionError, match="recovery log"):
+            fv.assert_double_launch_recovery("fake-exe", 8000, 30)
