@@ -615,6 +615,7 @@ def test_main_threads_l3_seed(fv, tmp_path, monkeypatch):
         return True
 
     monkeypatch.setattr(fv, "_load_manifest", lambda sr: None)
+    monkeypatch.setattr(fv, "run_i18n_completeness", lambda sr: None)
     monkeypatch.setattr(fv, "scenario_fresh", lambda *a, **k: None)
     monkeypatch.setattr(fv, "run_l3_functional", fake_l3)
     with patch.object(sys, "argv", ["frozen_verify.py", "--exe", str(exe),
