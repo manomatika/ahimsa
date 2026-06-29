@@ -1313,7 +1313,7 @@ jobs:
               for entry in ['.git', '.github', '.husky', '.gitattributes', '.gitignore', 'node_modules', 'tests']:
                   path = os.path.join(dest, entry)
                   if os.path.isdir(path):
-                      shutil.rmtree(path)
+                      shutil.rmtree(path, onerror=lambda f, p, e: (os.chmod(p, 0o777), f(p)))
                       dropped.append(entry)
                   elif os.path.isfile(path):
                       os.remove(path)
@@ -1498,7 +1498,7 @@ jobs:
               for entry in ['.git', '.github', '.husky', '.gitattributes', '.gitignore', 'node_modules', 'tests']:
                   path = os.path.join(dest, entry)
                   if os.path.isdir(path):
-                      shutil.rmtree(path)
+                      shutil.rmtree(path, onerror=lambda f, p, e: (os.chmod(p, 0o777), f(p)))
                       dropped.append(entry)
                   elif os.path.isfile(path):
                       os.remove(path)
@@ -1676,7 +1676,7 @@ jobs:
               for entry in ['.git', '.github', '.husky', '.gitattributes', '.gitignore', 'node_modules', 'tests']:
                   path = os.path.join(dest, entry)
                   if os.path.isdir(path):
-                      shutil.rmtree(path)
+                      shutil.rmtree(path, onerror=lambda f, p, e: (os.chmod(p, 0o777), f(p)))
                       dropped.append(entry)
                   elif os.path.isfile(path):
                       os.remove(path)
