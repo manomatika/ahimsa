@@ -87,6 +87,7 @@ import os
 from pathlib import Path
 import random
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -456,6 +457,167 @@ def _assert_refreshed(home: str, boot_text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lifecycle assertions (D — rule-22 frozen-artifact gate regressions)
+# ---------------------------------------------------------------------------
+
+def assert_healthz_reachable_and_version(port: int, expected_matika_tag: str) -> None:
+    """Probe /healthz, assert product==ManoMatika + version matches tag + status==ok.
+
+    Also verifies the server is NOT reachable on any non-loopback interface.
+    The non-loopback check is skipped when no non-loopback interface is
+    discoverable (pure-loopback CI container).
+    """
+    url = f"http://127.0.0.1:{port}/healthz"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            body_bytes = resp.read()
+    except (urllib.error.URLError, OSError) as exc:
+        raise AssertionError(
+            f"Failed to probe /healthz on port {port}: {exc}"
+        ) from exc
+
+    try:
+        body = json.loads(body_bytes)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"/healthz on port {port} returned non-JSON body: {body_bytes!r}"
+        ) from exc
+
+    assert body.get("product") == "ManoMatika", (
+        f"/healthz product mismatch on port {port}: "
+        f"expected 'ManoMatika', got {body.get('product')!r}; body: {body!r}"
+    )
+    assert body.get("status") == "ok", (
+        f"/healthz status mismatch on port {port}: "
+        f"expected 'ok', got {body.get('status')!r}; body: {body!r}"
+    )
+    expected_version = expected_matika_tag.lstrip("v")
+    actual_version = body.get("version", "")
+    assert actual_version == expected_version, (
+        f"/healthz version mismatch on port {port}: "
+        f"expected {expected_version!r} (tag {expected_matika_tag!r}), "
+        f"got {actual_version!r}; body: {body!r}"
+    )
+    print(f"INFO: healthz OK: {body!r} (port {port})")
+
+    # Loopback-only sub-check: assert non-loopback address is refused.
+    # Use socket.create_connection so this check is independent of urllib mocking.
+    try:
+        non_loopback_ip = socket.gethostbyname(socket.gethostname())
+    except OSError:
+        non_loopback_ip = "127.0.0.1"
+
+    if non_loopback_ip.startswith("127."):
+        # Hostname resolved to loopback — try IPv6 loopback as the test target
+        non_loopback_ip = "::1"
+
+    if non_loopback_ip == "::1":
+        print("INFO: healthz loopback-only: skipped (no non-loopback interface found)")
+        return
+
+    # Non-loopback IP found — assert the server cannot be reached there
+    try:
+        conn = socket.create_connection((non_loopback_ip, port), timeout=3)
+        conn.close()
+        raise AssertionError(
+            f"/healthz is reachable on non-loopback {non_loopback_ip}:{port} "
+            f"— server must bind loopback-only (127.0.0.1)"
+        )
+    except OSError:
+        print(f"INFO: healthz loopback-only: {non_loopback_ip} correctly refused")
+
+
+def assert_double_launch_recovery(exe: str, port: int, timeout: int) -> None:
+    """Boot a second instance while the first is running; assert graceful exit 0.
+
+    Instance B must detect port already in use, identify the running ManoMatika
+    instance, and exit 0 — logging the graceful-recovery decision line.
+
+    MANDATE: FAILS against pre-fix artifact (exits 1 silently on port conflict);
+    PASSES against post-fix artifact (exits 0 gracefully).
+    """
+    b_home = tempfile.mkdtemp(prefix="mm-verify-dl-b-")
+    try:
+        env = dict(os.environ)
+        env["HOME"] = b_home
+        env["USERPROFILE"] = b_home
+        env["BROWSER"] = "true" if os.name != "nt" else "cmd /c rem"
+        proc_b = subprocess.Popen(
+            [exe], env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        try:
+            stdout_b, _ = proc_b.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc_b.kill()
+            stdout_b, _ = proc_b.communicate()
+            raise AssertionError(
+                f"double-launch: instance B timed out after 30s (did not exit); "
+                f"B output: {stdout_b!r}"
+            )
+        out_b = (
+            stdout_b.decode("utf-8", errors="replace")
+            if isinstance(stdout_b, bytes)
+            else (stdout_b or "")
+        )
+        assert proc_b.returncode == 0, (
+            f"double-launch: instance B must exit 0 (graceful recovery) but "
+            f"exited {proc_b.returncode}; B output:\n{out_b}"
+        )
+        recovery_keywords = [
+            "ManoMatika instance",
+            "focusing existing window",
+            "already held",
+        ]
+        match = next((kw for kw in recovery_keywords if kw in out_b), None)
+        assert match is not None, (
+            f"double-launch: instance B exited 0 but no recovery log line found "
+            f"(checked for: {recovery_keywords!r}); B output:\n{out_b}"
+        )
+        print("INFO: double-launch: instance B exited 0 (graceful recovery confirmed)")
+        print(f"INFO: double-launch: B output contained recovery log line: {match!r}")
+    finally:
+        shutil.rmtree(b_home, ignore_errors=True)
+
+
+def assert_abrupt_kill_port_free(proc: "subprocess.Popen[bytes]", port: int) -> None:
+    """SIGKILL a running app; assert the port is free 1s later and stays free 3s later.
+
+    Proves the OS released the port after an abrupt kill (D3 freeze_support fix).
+    """
+    if proc.poll() is not None:
+        print(f"INFO: abrupt-kill: process already dead (skipping SIGKILL)")
+        return
+
+    proc.kill()
+    proc.wait(timeout=10)
+
+    time.sleep(1.0)
+
+    def _try_bind(port_: int, elapsed_label: str) -> None:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port_))
+        except OSError as exc:
+            raise AssertionError(
+                f"ERROR: abrupt-kill: port {port_} still in use {elapsed_label}s "
+                f"after SIGKILL — possible orphan or respawn! ({exc})"
+            ) from exc
+        finally:
+            with contextlib.suppress(Exception):
+                s.close()
+
+    _try_bind(port, "1")
+    print(f"INFO: abrupt-kill: port {port} confirmed free 1s after SIGKILL")
+
+    time.sleep(2.0)
+
+    _try_bind(port, "3")
+    print(f"INFO: abrupt-kill: no respawn detected (port still free after 3s)")
+
+
+# ---------------------------------------------------------------------------
 # Scenario drivers
 # ---------------------------------------------------------------------------
 
@@ -490,13 +652,19 @@ def _run_checks(app: BootedApp, browser: bool, manifest) -> None:
         run_tier_b(app.base, manifest)
 
 
-def scenario_fresh(exe: str, port: int, timeout: int, browser: bool, manifest) -> None:
+def scenario_fresh(exe: str, port: int, timeout: int, browser: bool, manifest,
+                   matika_tag: str | None = None) -> None:
     print("=== SCENARIO: fresh (first-time install) ===")
     home = tempfile.mkdtemp(prefix="mm-verify-fresh-")
     try:
         with BootedApp(exe, home, port, timeout) as app:
             try:
                 _run_checks(app, browser, manifest)
+                if matika_tag is not None:
+                    assert_healthz_reachable_and_version(port, matika_tag)
+                if matika_tag is not None:
+                    assert_double_launch_recovery(exe, port, timeout)
+                assert_abrupt_kill_port_free(app.proc, port)
             except Exception:
                 _dump_failure(app)
                 raise
@@ -505,7 +673,8 @@ def scenario_fresh(exe: str, port: int, timeout: int, browser: bool, manifest) -
     print("=== fresh: PASS ===\n")
 
 
-def scenario_upgrade(exe: str, port: int, timeout: int, browser: bool, manifest) -> None:
+def scenario_upgrade(exe: str, port: int, timeout: int, browser: bool, manifest,
+                     matika_tag: str | None = None) -> None:
     print("=== SCENARIO: upgrade (over a prior, stale install) ===")
     home = tempfile.mkdtemp(prefix="mm-verify-upgrade-")
     try:
@@ -522,6 +691,9 @@ def scenario_upgrade(exe: str, port: int, timeout: int, browser: bool, manifest)
             try:
                 _assert_refreshed(home, boot_text)
                 _run_checks(app, browser, manifest)
+                if matika_tag is not None:
+                    assert_healthz_reachable_and_version(port, matika_tag)
+                assert_abrupt_kill_port_free(app.proc, port)
             except Exception:
                 _dump_failure(app)
                 raise
@@ -810,12 +982,17 @@ def main() -> int:
                          "ordering. When omitted, a base seed is generated and "
                          "LOGGED ('L3 random seed: <seed>') so a failing run can be "
                          "reproduced verbatim by passing that value back here.")
+    ap.add_argument("--matika-tag", default=None,
+                    help="Matika release tag (e.g. v0.0.4-rc.11) — used to verify "
+                         "/healthz version matches")
     args = ap.parse_args()
 
     exe = os.path.abspath(args.exe)
     if not os.path.exists(exe):
         print(f"::error::frozen executable not found: {exe}")
         return 1
+
+    matika_tag = args.matika_tag
 
     # L3 runs when explicitly requested OR whenever a source-root is available
     # (the functional manifest is discovered from the pinned source clones).
@@ -834,9 +1011,11 @@ def main() -> int:
         if args.scenario == "fresh":
             if args.source_root:
                 assert_plugin_payload_clean(Path(args.source_root))
-            scenario_fresh(exe, args.port, args.timeout, args.browser, manifest)
+            scenario_fresh(exe, args.port, args.timeout, args.browser, manifest,
+                           matika_tag=matika_tag)
         else:
-            scenario_upgrade(exe, args.port, args.timeout, args.browser, manifest)
+            scenario_upgrade(exe, args.port, args.timeout, args.browser, manifest,
+                             matika_tag=matika_tag)
         # Layer-3 functional tests run AFTER the single-boot tier-a/b block has
         # closed (so the port is free), on BOTH scenarios (rule 22, both install
         # paths — CI invokes this once per scenario, so L3 runs on each path).
