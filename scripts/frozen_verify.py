@@ -84,6 +84,7 @@ import glob
 import importlib.util
 import json
 import os
+from pathlib import Path
 import random
 import shutil
 import subprocess
@@ -110,6 +111,35 @@ STALE_COMING_SOON = (
 )
 USER_DATA_NAME = "USER_NOTES.txt"
 USER_DATA_CONTENT = "user-created data that MUST survive a plugin refresh\n"
+
+SCAFFOLDING_ENTRIES = ['.git', '.github', '.husky', '.gitattributes', '.gitignore', 'node_modules', 'tests']
+
+
+def assert_plugin_payload_clean(data_dir: Path) -> None:
+    """Assert that no dev scaffolding leaked into the extracted plugin payload.
+
+    Rule 22: this assertion must FAIL on a build from the unpatched build.yml
+    and PASS on a build from the patched build.yml.
+    """
+    plugins_dir = data_dir / "plugins"
+    if not plugins_dir.exists():
+        print(f"WARNING: plugins dir not found at {plugins_dir}; skipping cleanliness check")
+        return
+    leaked = []
+    for plug_dir in sorted(plugins_dir.iterdir()):
+        if not plug_dir.is_dir():
+            continue
+        for entry in SCAFFOLDING_ENTRIES:
+            path = plug_dir / entry
+            if path.exists():
+                leaked.append(f"{plug_dir.name}/{entry}")
+    if leaked:
+        raise AssertionError(
+            f"ERROR: scaffolding leaked into payload: {leaked!r}\n"
+            f"  These entries must not exist in {plugins_dir}.\n"
+            f"  Fix: ensure build.yml strips scaffolding before bundling."
+        )
+    print(f"INFO: plugin payload clean — no scaffolding in {plugins_dir}")
 
 
 def _reconfigure_stdio() -> None:
@@ -802,6 +832,8 @@ def main() -> int:
         manifest = _load_manifest(args.source_root)
         run_i18n_completeness(args.source_root)
         if args.scenario == "fresh":
+            if args.source_root:
+                assert_plugin_payload_clean(Path(args.source_root))
             scenario_fresh(exe, args.port, args.timeout, args.browser, manifest)
         else:
             scenario_upgrade(exe, args.port, args.timeout, args.browser, manifest)

@@ -747,6 +747,88 @@ def test_install_verify_consumes_build_sha_outputs(workflow, job_name):
     assert "APPLUG_SHAS" in runs
 
 
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_build_job_strips_scaffolding_after_sha_resolution(workflow, job_name):
+    """After SHA resolution, a step must strip .git/.github/etc from plugin dirs."""
+    job = workflow["jobs"][job_name]
+    steps = job["steps"]
+    # Find the SHA resolution step (id: shas)
+    shas_idx = next(
+        (i for i, s in enumerate(steps) if s.get("id") == "shas"),
+        None,
+    )
+    assert shas_idx is not None, f"{job_name} must have a step with id: shas"
+    # Find a step AFTER shas that strips scaffolding
+    post_shas_steps = steps[shas_idx + 1:]
+    strip_steps = [
+        s for s in post_shas_steps
+        if ".git" in s.get("run", "") and "rm -rf" in s.get("run", "")
+    ]
+    assert strip_steps, (
+        f"{job_name}: no post-SHA-resolution step strips .git from plugin dirs. "
+        f"Scaffolding must be removed AFTER SHA resolution (which reads .git), "
+        f"BEFORE PyInstaller bundles the plugins."
+    )
+    # Verify it covers the known scaffolding entries
+    run_text = " ".join(s.get("run", "") for s in strip_steps)
+    for entry in [".git", ".github", ".gitignore"]:
+        assert entry in run_text, f"{job_name} strip step does not remove {entry}"
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_build_job_strip_is_before_pyinstaller(workflow, job_name):
+    """The scaffolding strip must run before PyInstaller bundles the plugins."""
+    job = workflow["jobs"][job_name]
+    steps = job["steps"]
+    strip_idx = next(
+        (i for i, s in enumerate(steps) if ".git" in s.get("run", "") and "rm -rf" in s.get("run", "")),
+        None,
+    )
+    pyinstaller_idx = next(
+        (i for i, s in enumerate(steps) if "pyinstaller matika.spec" in s.get("run", "")),
+        None,
+    )
+    assert strip_idx is not None, f"{job_name}: no scaffolding strip step found"
+    assert pyinstaller_idx is not None, f"{job_name}: no pyinstaller step found"
+    assert strip_idx < pyinstaller_idx, (
+        f"{job_name}: strip step (idx {strip_idx}) must precede pyinstaller step (idx {pyinstaller_idx})"
+    )
+
+
+@pytest.mark.parametrize("job_name", INSTALL_VERIFY_JOBS)
+def test_install_verify_job_strips_scaffolding_after_checkout(workflow, job_name):
+    """Install-verify jobs must strip scaffolding from the side-clone immediately after checkout."""
+    job = workflow["jobs"][job_name]
+    # Find the applug checkout step
+    checkout_steps = [
+        s for s in job["steps"]
+        if "APPLUG_SHAS" in s.get("env", {}) or "FETCH_HEAD" in s.get("run", "")
+    ]
+    assert checkout_steps, f"{job_name}: no applug checkout step found"
+    # The step must include scaffolding removal
+    run_text = " ".join(s.get("run", "") for s in checkout_steps)
+    assert ".git" in run_text and ("rm" in run_text or "rmtree" in run_text), (
+        f"{job_name}: applug checkout step must strip .git after checkout"
+    )
+
+
+@pytest.mark.parametrize("job_name", BUILD_JOBS)
+def test_strip_step_fails_loud_on_leaked_scaffolding(workflow, job_name):
+    """The strip step must exit 1 if scaffolding leaked through (fail-loud mandate)."""
+    job = workflow["jobs"][job_name]
+    # Find the strip step
+    strip_steps = [
+        s for s in job["steps"]
+        if ".git" in s.get("run", "") and "rm -rf" in s.get("run", "")
+    ]
+    assert strip_steps
+    run_text = " ".join(s.get("run", "") for s in strip_steps)
+    # Must exit nonzero on leaked scaffolding
+    assert "exit 1" in run_text or "ERROR" in run_text, (
+        "strip step must fail loud (exit 1) if scaffolding leaked into payload"
+    )
+
+
 @pytest.mark.parametrize("job_name", INSTALL_VERIFY_JOBS)
 def test_install_verify_runs_l3_against_installed_exe(workflow, job_name):
     """frozen_verify in install-verify must keep --exe on the installed binary

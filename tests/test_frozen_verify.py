@@ -587,6 +587,62 @@ def test_l3_generates_and_logs_seed_when_none(fv, tmp_path, monkeypatch, capsys)
     assert "L3 random seed:" in out
 
 
+class TestPluginPayloadClean:
+    def test_passes_when_no_scaffolding_present(self, fv, tmp_path):
+        """assert_plugin_payload_clean passes when plugins have no scaffolding."""
+        plugins_dir = tmp_path / "plugins" / "eyerate"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / "applug.json").write_text('{"name":"eyerate"}')
+        (plugins_dir / "views.py").write_text("# runtime code")
+        fv.assert_plugin_payload_clean(tmp_path)
+
+    def test_fails_when_git_dir_present(self, fv, tmp_path):
+        """assert_plugin_payload_clean fails if .git/ is present in a plugin dir."""
+        plugins_dir = tmp_path / "plugins" / "eyerate"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / ".git").mkdir()
+        (plugins_dir / ".git" / "config").write_text("[core]")
+        with pytest.raises(AssertionError, match="scaffolding leaked"):
+            fv.assert_plugin_payload_clean(tmp_path)
+
+    def test_fails_when_github_dir_present(self, fv, tmp_path):
+        """assert_plugin_payload_clean fails if .github/ is present."""
+        plugins_dir = tmp_path / "plugins" / "eyerate"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / ".github").mkdir()
+        with pytest.raises(AssertionError, match="scaffolding leaked"):
+            fv.assert_plugin_payload_clean(tmp_path)
+
+    def test_fails_when_gitignore_present(self, fv, tmp_path):
+        """assert_plugin_payload_clean fails if .gitignore is present."""
+        plugins_dir = tmp_path / "plugins" / "eyerate"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / ".gitignore").write_text("*.pyc\n")
+        with pytest.raises(AssertionError, match="scaffolding leaked"):
+            fv.assert_plugin_payload_clean(tmp_path)
+
+    def test_fails_when_tests_dir_present(self, fv, tmp_path):
+        """assert_plugin_payload_clean fails if tests/ is present."""
+        plugins_dir = tmp_path / "plugins" / "eyerate"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / "tests").mkdir()
+        with pytest.raises(AssertionError, match="scaffolding leaked"):
+            fv.assert_plugin_payload_clean(tmp_path)
+
+    def test_skips_gracefully_when_no_plugins_dir(self, fv, tmp_path):
+        """assert_plugin_payload_clean logs a warning and does not raise if plugins/ missing."""
+        fv.assert_plugin_payload_clean(tmp_path)
+
+    def test_error_message_names_leaked_path(self, fv, tmp_path):
+        """The error message must name the specific leaked entry for debuggability."""
+        plugins_dir = tmp_path / "plugins" / "eyerate"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / ".git").mkdir()
+        with pytest.raises(AssertionError) as exc_info:
+            fv.assert_plugin_payload_clean(tmp_path)
+        assert "eyerate/.git" in str(exc_info.value)
+
+
 def test_l3_same_seed_reproduces_run_order(fv, tmp_path, monkeypatch):
     """run_l3_functional with the same seed produces the same per-applug order."""
     root = _make_functional_source_root(
