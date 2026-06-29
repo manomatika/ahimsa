@@ -81,6 +81,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import glob
+import importlib.util
 import json
 import os
 import random
@@ -689,6 +690,73 @@ def _load_manifest(source_root):
     return manifest
 
 
+def _load_i18n_checker(source_root: str):
+    """Load matika's CANONICAL i18n-completeness checker from the pinned source.
+
+    matika owns the one implementation (``src/matika/core/i18n_completeness.py``);
+    the gate INVOKES it — it never reimplements the merge/scan logic (rule 18). The
+    module is stdlib-only and self-contained, so we exec it by file path without
+    importing the matika package or installing its dependencies.
+    """
+    path = os.path.join(
+        source_root, "src", "matika", "core", "i18n_completeness.py"
+    )
+    if not os.path.exists(path):
+        raise FrozenAppError(
+            "i18n-completeness checker not found in pinned source "
+            f"(expected canonical module at {path}); cannot verify translations"
+        )
+    name = "matika_i18n_completeness"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    # Register before exec so the module's @dataclass definitions can resolve their
+    # own annotations namespace via sys.modules[cls.__module__] (the module uses
+    # ``from __future__ import annotations``; without this dataclasses raises).
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def run_i18n_completeness(source_root) -> None:
+    """STRICT i18n-completeness gate over the assembled product (source-clone arm).
+
+    Verifies every i18n key referenced anywhere in matika core and each bundled
+    applug resolves in EVERY shipped locale, and that all locales are at parity —
+    against the FROZEN, pinned source tree ``ahimsa`` assembled. A miss FAILS the
+    build, naming the key, locale and file (rule 18). Like the screen-manifest
+    checks this is the source-clone arm: with no ``--source-root`` there is no tree
+    to scan, so it is skipped (the property is source-derived, not artifact-derived).
+    """
+    if not source_root:
+        print("  · no --source-root given: i18n-completeness gate SKIPPED for this "
+              "run (source-clone arm only; the property is verified from the pinned "
+              "source tree, which the install-verify A2 arm does not carry).")
+        return
+    checker = _load_i18n_checker(source_root)
+    components = checker.frozen_tree_components(source_root)
+    # Refuse to pass vacuously (rule 22): the assembled product MUST ship matika
+    # core translations. A run that found no core catalogs scanned nothing, so a
+    # green result would be meaningless — fail the build instead.
+    core = next((c for c in components if getattr(c, "is_core", False)), None)
+    if core is None or not checker.discover_catalogs(core.locales_dir):
+        raise FrozenAppError(
+            f"i18n-completeness gate found no matika-core locale catalogs under "
+            f"{source_root}; the assembled product must ship core translations. "
+            f"Refusing to pass vacuously (rule 22)."
+        )
+    violations = checker.analyze(components)
+    if violations:
+        raise FrozenAppError(
+            "i18n-completeness gate FAILED: a referenced translated string is "
+            "missing from a shipped locale. Every referenced i18n key must resolve "
+            "in every locale, and all locales must be at parity:\n"
+            + "\n".join(v.render() for v in violations)
+        )
+    names = ", ".join(c.name for c in components)
+    print(f"  · i18n-completeness gate PASS: {len(components)} component(s) "
+          f"[{names}] — all referenced keys resolve in every shipped locale")
+
+
 def main() -> int:
     _reconfigure_stdio()
     ap = argparse.ArgumentParser(description=__doc__)
@@ -732,6 +800,7 @@ def main() -> int:
 
     try:
         manifest = _load_manifest(args.source_root)
+        run_i18n_completeness(args.source_root)
         if args.scenario == "fresh":
             scenario_fresh(exe, args.port, args.timeout, args.browser, manifest)
         else:
