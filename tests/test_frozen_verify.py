@@ -740,8 +740,45 @@ class TestLifecycleAssertions:
         # Port is not in use, so bind should succeed
         fv.assert_abrupt_kill_port_free(MockProc(), 19999)  # unlikely-used port
 
+    def test_abrupt_kill_port_free_retries_then_passes_when_residue_clears(self, fv, monkeypatch):
+        """Bounded retry: a transient post-SIGKILL bind failure that clears within the
+        retry window must PASS (manomatika/ahimsa#119/#120 — macOS teardown-residue
+        false-positive). This is the harness's exact failure mode: the port is genuinely
+        free, but the very first plain bind attempt hits a transient kernel window."""
+        import socket as _socket
+        class MockProc:
+            pid = 31337
+            returncode = None
+            def kill(self): self.returncode = -9
+            def wait(self, timeout=None): pass
+            def poll(self): return self.returncode
+
+        real_socket_cls = _socket.socket
+        call_count = {"n": 0}
+
+        class FlakyThenClearSocket:
+            """First two plain-bind attempts raise (simulated transient residue); third+ succeed."""
+            def __init__(self, *a, **kw):
+                self._s = real_socket_cls(*a, **kw)
+                call_count["n"] += 1
+                self._attempt = call_count["n"]
+            def bind(self, addr):
+                if self._attempt <= 2:
+                    raise OSError(48, "Address already in use")
+                return self._s.bind(addr)
+            def setsockopt(self, *a, **kw): return self._s.setsockopt(*a, **kw)
+            def close(self): return self._s.close()
+
+        monkeypatch.setattr(fv.socket, "socket", FlakyThenClearSocket)
+        # Must NOT raise — bounded retry absorbs the transient residue and passes.
+        fv.assert_abrupt_kill_port_free(MockProc(), 19994)
+        assert call_count["n"] >= 3, "expected at least 3 bind attempts before success"
+
     def test_abrupt_kill_port_free_fails_when_port_held(self, fv, monkeypatch):
-        """assert_abrupt_kill_port_free fails when port is still in use after kill."""
+        """assert_abrupt_kill_port_free fails when port is still in use after kill —
+        a real orphan/respawn must still fail after the bounded retry window is exhausted,
+        with the error reporting multiple attempts (proves retries actually ran, not a
+        single immediate failure)."""
         import subprocess, socket as _socket, time
         class MockProc:
             pid = 99999
@@ -756,8 +793,12 @@ class TestLifecycleAssertions:
         try:
             s.bind(("127.0.0.1", test_port))
             s.listen(1)  # must listen — bind-only isn't enough to block a plain bind on Linux
-            with pytest.raises((AssertionError, OSError)):
+            with pytest.raises((AssertionError, OSError)) as excinfo:
                 fv.assert_abrupt_kill_port_free(MockProc(), test_port)
+            assert "attempts" in str(excinfo.value)
+            assert "1 attempts" not in str(excinfo.value), (
+                "expected multiple retry attempts before failing, not a single immediate failure"
+            )
         finally:
             s.close()
 
@@ -785,7 +826,8 @@ class TestLifecycleAssertions:
         assert "abrupt-kill diag: plain bind FAILED; SO_REUSEADDR bind FAILED" in out
 
     def test_abrupt_kill_diag_so_reuseaddr_succeeds_when_only_residue(self, fv, capsys, monkeypatch):
-        """If only the plain bind fails (residue) but SO_REUSEADDR bind would succeed, diag says so."""
+        """If the plain bind fails for the ENTIRE retry window (residue persists) but
+        SO_REUSEADDR bind would succeed, the bounded retry exhausts and diag says so."""
         import socket as _socket
         class MockProc:
             pid = 555
@@ -795,22 +837,25 @@ class TestLifecycleAssertions:
             def poll(self): return self.returncode
 
         real_socket_cls = _socket.socket
-        call_count = {"n": 0}
 
-        class FlakyBindSocket:
-            """First bind() (the harness's plain, no-REUSEADDR probe) raises; all others succeed."""
+        class ResidueSocket:
+            """Plain bind always raises (residue persists the whole window); a bind on a
+            socket with SO_REUSEADDR set (the diagnostics probe) succeeds — matching the
+            real macOS evidence captured in manomatika/ahimsa#119."""
             def __init__(self, *a, **kw):
                 self._s = real_socket_cls(*a, **kw)
-                call_count["n"] += 1
-                self._is_first = call_count["n"] == 1
+                self._reuseaddr = False
+            def setsockopt(self, level, optname, value):
+                if optname == _socket.SO_REUSEADDR:
+                    self._reuseaddr = True
+                return self._s.setsockopt(level, optname, value)
             def bind(self, addr):
-                if self._is_first:
-                    raise OSError(48, "Address already in use")
-                return self._s.bind(addr)
-            def setsockopt(self, *a, **kw): return self._s.setsockopt(*a, **kw)
+                if self._reuseaddr:
+                    return self._s.bind(addr)
+                raise OSError(48, "Address already in use")
             def close(self): return self._s.close()
 
-        monkeypatch.setattr(fv.socket, "socket", FlakyBindSocket)
+        monkeypatch.setattr(fv.socket, "socket", ResidueSocket)
         with pytest.raises(AssertionError):
             fv.assert_abrupt_kill_port_free(MockProc(), 19996)
         out = capsys.readouterr().out
