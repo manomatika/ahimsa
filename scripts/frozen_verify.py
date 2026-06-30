@@ -667,18 +667,37 @@ def assert_abrupt_kill_port_free(proc: "subprocess.Popen[bytes]", port: int) -> 
     def _try_bind(port_: int, elapsed_label: str) -> None:
         # No SO_REUSEADDR: a listening server (uvicorn) holds the port even with REUSEADDR,
         # and we want to detect that. A plain bind fails on a live listener.
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            s.bind(("127.0.0.1", port_))
-        except OSError as exc:
-            _capture_diagnostics(port_)
-            raise AssertionError(
-                f"ERROR: abrupt-kill: port {port_} still in use {elapsed_label}s "
-                f"after SIGKILL — possible orphan or respawn! ({exc})"
-            ) from exc
-        finally:
-            with contextlib.suppress(Exception):
-                s.close()
+        #
+        # Bounded retry: macOS can hold a transient kernel socket-teardown window where a
+        # plain bind is rejected even though no live process holds the port (manomatika/ahimsa#119
+        # proved this via ps/lsof/SO_REUSEADDR-probe evidence — harness false-positive, not a
+        # real orphan). Retry the plain bind a few times over a short bounded window before
+        # failing; a real orphan/respawn still fails every attempt and raises as before.
+        retry_interval = 0.25
+        max_wait = 3.0
+        start = time.monotonic()
+        attempt = 0
+        last_exc: OSError | None = None
+        while True:
+            attempt += 1
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                s.bind(("127.0.0.1", port_))
+                return
+            except OSError as exc:
+                last_exc = exc
+            finally:
+                with contextlib.suppress(Exception):
+                    s.close()
+            if time.monotonic() - start >= max_wait:
+                break
+            time.sleep(retry_interval)
+        _capture_diagnostics(port_)
+        raise AssertionError(
+            f"ERROR: abrupt-kill: port {port_} still in use after {attempt} attempts "
+            f"over {max_wait}s (checked at {elapsed_label}s after SIGKILL) — "
+            f"possible orphan or respawn! ({last_exc})"
+        ) from last_exc
 
     _try_bind(port, "1")
     print(f"INFO: abrupt-kill: port {port} confirmed free 1s after SIGKILL")
