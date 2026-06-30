@@ -580,10 +580,40 @@ def assert_double_launch_recovery(exe: str, port: int, timeout: int) -> None:
         shutil.rmtree(b_home, ignore_errors=True)
 
 
+def _probe_port_bindable(port: int) -> "OSError | None":
+    """Mirror the REAL launcher's port-free decision EXACTLY.
+
+    The matika launcher's own "can I start here?" gate is ``_port_available()``
+    (matika/launcher.py): ``AF_INET`` + ``SOCK_STREAM`` + ``SO_REUSEADDR`` +
+    ``bind(("127.0.0.1", port))``; its uvicorn listen socket binds the same
+    address with SO_REUSEADDR too. This probe binds IDENTICALLY so the assertion
+    means precisely "would the real app bind here?", nothing stricter.
+
+    Returns ``None`` if the port is bindable the launcher's way (the app WOULD
+    start), or the ``OSError`` a launcher-identical bind raises (a real live
+    LISTEN socket still holds the port — SO_REUSEADDR does not let us bind over an
+    active listener, only over TIME_WAIT residue).
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", port))
+        return None
+    except OSError as exc:
+        return exc
+    finally:
+        with contextlib.suppress(Exception):
+            s.close()
+
+
 def assert_abrupt_kill_port_free(proc: "subprocess.Popen[bytes]", port: int) -> None:
     """SIGKILL a running app; assert the port is free 1s later and stays free 3s later.
 
     Proves the OS released the port after an abrupt kill (D3 freeze_support fix).
+    The free-check binds the port EXACTLY as the real launcher does (AF_INET +
+    SO_REUSEADDR + 127.0.0.1) so a transient TIME_WAIT teardown window — which the
+    real app tolerates but a plain bind rejects — is not a false positive, while a
+    real orphan/respawned LISTEN socket still fails the assertion.
     """
     if proc.poll() is not None:
         print(f"INFO: abrupt-kill: process already dead (skipping SIGKILL)")
@@ -645,59 +675,55 @@ def assert_abrupt_kill_port_free(proc: "subprocess.Popen[bytes]", port: int) -> 
         else:
             print("DIAG: abrupt-kill: ps/lsof capture skipped (not macOS)")
 
-        reuseaddr_result = "FAILED"
-        reuseaddr_exc: Exception | None = None
-        try:
+        # Contrast a PLAIN bind against the launcher-identical SO_REUSEADDR bind.
+        # The assertion now uses the SO_REUSEADDR form, so reaching this failure
+        # path means even the launcher's own bind was rejected (a real listener).
+        # plain-FAILS + reuseaddr-FAILS together = genuine orphan; plain-FAILS +
+        # reuseaddr-SUCCEEDS would have been the old TIME_WAIT false positive
+        # (no longer possible to reach here, by construction).
+        def _probe_bind(use_reuseaddr: bool) -> str:
             probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
-                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if use_reuseaddr:
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 probe.bind(("127.0.0.1", port_))
-                reuseaddr_result = "SUCCEEDED"
+                return "SUCCEEDED"
             except OSError as exc:
-                reuseaddr_exc = exc
+                return f"FAILED ({exc!r})"
+            except Exception as exc:
+                return f"FAILED ({exc!r})"
             finally:
                 with contextlib.suppress(Exception):
                     probe.close()
-        except Exception as exc:
-            reuseaddr_exc = exc
-        print(f"DIAG: abrupt-kill diag: plain bind FAILED; SO_REUSEADDR bind {reuseaddr_result}")
-        if reuseaddr_exc is not None:
-            print(f"DIAG:   SO_REUSEADDR bind exception: {reuseaddr_exc!r}")
+
+        print(f"DIAG: abrupt-kill diag: plain bind {_probe_bind(False)}; "
+              f"SO_REUSEADDR (launcher-identical) bind {_probe_bind(True)}")
 
     def _try_bind(port_: int, elapsed_label: str) -> None:
-        # No SO_REUSEADDR: a listening server (uvicorn) holds the port even with REUSEADDR,
-        # and we want to detect that. A plain bind fails on a live listener.
+        # Bind EXACTLY as the real launcher does — AF_INET + SO_REUSEADDR + 127.0.0.1
+        # (see _probe_port_bindable). The assertion must mean "would the real app
+        # bind here?", nothing stricter.
         #
-        # Bounded retry: macOS can hold a transient kernel socket-teardown window where a
-        # plain bind is rejected even though no live process holds the port (manomatika/ahimsa#119
-        # proved this via ps/lsof/SO_REUSEADDR-probe evidence — harness false-positive, not a
-        # real orphan). Retry the plain bind a few times over a short bounded window before
-        # failing; a real orphan/respawn still fails every attempt and raises as before.
-        retry_interval = 0.25
-        max_wait = 3.0
-        start = time.monotonic()
-        attempt = 0
-        last_exc: OSError | None = None
-        while True:
-            attempt += 1
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            try:
-                s.bind(("127.0.0.1", port_))
-                return
-            except OSError as exc:
-                last_exc = exc
-            finally:
-                with contextlib.suppress(Exception):
-                    s.close()
-            if time.monotonic() - start >= max_wait:
-                break
-            time.sleep(retry_interval)
+        # Why SO_REUSEADDR (the manomatika/ahimsa#119/#120 mechanism): after SIGKILL
+        # macOS leaves the port in a TIME_WAIT teardown window — produced by the
+        # harness's own healthz/double-launch connections to the server. The process
+        # is reaped (ps clean, lsof LISTEN empty), yet a PLAIN bind is rejected
+        # (EADDRINUSE) for that whole window. The real launcher always binds with
+        # SO_REUSEADDR, which bypasses exactly that residue, so it would start fine;
+        # a plain-bind probe is stricter than the app and false-positives. This is a
+        # SEMANTIC bind difference, not a timing window — so we mirror the launcher's
+        # bind, NOT widen a retry (the #120 bounded retry is removed). SO_REUSEADDR
+        # still cannot bind over an active LISTEN socket (uvicorn sets no SO_REUSEPORT),
+        # so a real orphan/respawn fails here and fires the assertion.
+        exc = _probe_port_bindable(port_)
+        if exc is None:
+            return
         _capture_diagnostics(port_)
         raise AssertionError(
-            f"ERROR: abrupt-kill: port {port_} still in use after {attempt} attempts "
-            f"over {max_wait}s (checked at {elapsed_label}s after SIGKILL) — "
-            f"possible orphan or respawn! ({last_exc})"
-        ) from last_exc
+            f"ERROR: abrupt-kill: port {port_} still held by a live listener "
+            f"(checked {elapsed_label}s after SIGKILL; launcher-identical bind: "
+            f"AF_INET + SO_REUSEADDR + 127.0.0.1) — possible orphan or respawn! ({exc})"
+        ) from exc
 
     _try_bind(port, "1")
     print(f"INFO: abrupt-kill: port {port} confirmed free 1s after SIGKILL")
