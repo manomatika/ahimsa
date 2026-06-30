@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -740,12 +741,15 @@ class TestLifecycleAssertions:
         # Port is not in use, so bind should succeed
         fv.assert_abrupt_kill_port_free(MockProc(), 19999)  # unlikely-used port
 
-    def test_abrupt_kill_port_free_retries_then_passes_when_residue_clears(self, fv, monkeypatch):
-        """Bounded retry: a transient post-SIGKILL bind failure that clears within the
-        retry window must PASS (manomatika/ahimsa#119/#120 — macOS teardown-residue
-        false-positive). This is the harness's exact failure mode: the port is genuinely
-        free, but the very first plain bind attempt hits a transient kernel window."""
-        import socket as _socket
+    def test_abrupt_kill_port_free_passes_over_real_time_wait_residue(self, fv):
+        """END-TO-END residue tolerance (manomatika/ahimsa#119/#120 mechanism, corrected).
+
+        On a port carrying genuine TIME_WAIT residue — the exact post-SIGKILL macOS
+        window where a PLAIN bind is rejected but a SO_REUSEADDR bind (the real
+        launcher's bind) succeeds — the full assertion must PASS, NOT false-positive.
+        This is what #120's bounded retry was papering over; the corrected probe
+        mirrors the launcher's SO_REUSEADDR bind and tolerates it directly (no retry).
+        """
         class MockProc:
             pid = 31337
             returncode = None
@@ -753,52 +757,39 @@ class TestLifecycleAssertions:
             def wait(self, timeout=None): pass
             def poll(self): return self.returncode
 
-        real_socket_cls = _socket.socket
-        call_count = {"n": 0}
-
-        class FlakyThenClearSocket:
-            """First two plain-bind attempts raise (simulated transient residue); third+ succeed."""
-            def __init__(self, *a, **kw):
-                self._s = real_socket_cls(*a, **kw)
-                call_count["n"] += 1
-                self._attempt = call_count["n"]
-            def bind(self, addr):
-                if self._attempt <= 2:
-                    raise OSError(48, "Address already in use")
-                return self._s.bind(addr)
-            def setsockopt(self, *a, **kw): return self._s.setsockopt(*a, **kw)
-            def close(self): return self._s.close()
-
-        monkeypatch.setattr(fv.socket, "socket", FlakyThenClearSocket)
-        # Must NOT raise — bounded retry absorbs the transient residue and passes.
-        fv.assert_abrupt_kill_port_free(MockProc(), 19994)
-        assert call_count["n"] >= 3, "expected at least 3 bind attempts before success"
+        port = _free_port()
+        _make_time_wait(port)
+        # The discriminator is real: the pre-fix PLAIN bind is rejected on this port.
+        assert _plain_bind_raises(port), (
+            "expected TIME_WAIT residue a plain bind rejects; platform did not form it"
+        )
+        # Must NOT raise — the launcher-identical (SO_REUSEADDR) bind tolerates residue.
+        fv.assert_abrupt_kill_port_free(MockProc(), port)
 
     def test_abrupt_kill_port_free_fails_when_port_held(self, fv, monkeypatch):
-        """assert_abrupt_kill_port_free fails when port is still in use after kill —
-        a real orphan/respawn must still fail after the bounded retry window is exhausted,
-        with the error reporting multiple attempts (proves retries actually ran, not a
-        single immediate failure)."""
-        import subprocess, socket as _socket, time
+        """assert_abrupt_kill_port_free fails (fail-loud) when a real orphan/respawn
+        still holds the port — a live LISTEN socket cannot be bound over even with
+        SO_REUSEADDR (uvicorn sets no SO_REUSEPORT), so the launcher-identical probe
+        fails and the assertion fires."""
+        import socket as _socket
         class MockProc:
             pid = 99999
             returncode = None
             def kill(self): self.returncode = -9
             def wait(self, timeout=None): pass
             def poll(self): return self.returncode
-        # Bind a socket on a test port to simulate the port still being held
+        # Bind+listen on the port to simulate a real orphan listener still holding it.
         test_port = 19998
         s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
         s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", test_port))
-            s.listen(1)  # must listen — bind-only isn't enough to block a plain bind on Linux
-            with pytest.raises((AssertionError, OSError)) as excinfo:
+            s.listen(1)  # must listen — bind-only isn't enough to block a bind on Linux
+            with pytest.raises(AssertionError) as excinfo:
                 fv.assert_abrupt_kill_port_free(MockProc(), test_port)
-            assert "attempts" in str(excinfo.value)
-            assert "1 attempts" not in str(excinfo.value), (
-                "expected multiple retry attempts before failing, not a single immediate failure"
-            )
+            msg = str(excinfo.value)
+            assert "still held by a live listener" in msg
+            assert "orphan or respawn" in msg
         finally:
             s.close()
 
@@ -823,11 +814,15 @@ class TestLifecycleAssertions:
             s.close()
         out = capsys.readouterr().out
         assert "DIAG: abrupt-kill: launched proc.pid=424242 proc.poll()=-9" in out
-        assert "abrupt-kill diag: plain bind FAILED; SO_REUSEADDR bind FAILED" in out
+        # Both binds fail on a real live listener (plain AND launcher-identical).
+        assert "abrupt-kill diag: plain bind FAILED" in out
+        assert "SO_REUSEADDR (launcher-identical) bind FAILED" in out
 
-    def test_abrupt_kill_diag_so_reuseaddr_succeeds_when_only_residue(self, fv, capsys, monkeypatch):
-        """If the plain bind fails for the ENTIRE retry window (residue persists) but
-        SO_REUSEADDR bind would succeed, the bounded retry exhausts and diag says so."""
+    def test_abrupt_kill_passes_when_only_residue_reuseaddr_bindable(self, fv, monkeypatch):
+        """CORRECTED behavior: residue that a PLAIN bind rejects but a SO_REUSEADDR bind
+        tolerates (the real macOS #119 evidence) means the real app COULD start — so the
+        assertion must PASS, not fail. #120 baked the opposite (residue -> raise) into a
+        test; the launcher-identical probe inverts it to the truthful outcome."""
         import socket as _socket
         class MockProc:
             pid = 555
@@ -839,9 +834,8 @@ class TestLifecycleAssertions:
         real_socket_cls = _socket.socket
 
         class ResidueSocket:
-            """Plain bind always raises (residue persists the whole window); a bind on a
-            socket with SO_REUSEADDR set (the diagnostics probe) succeeds — matching the
-            real macOS evidence captured in manomatika/ahimsa#119."""
+            """Plain bind always raises (residue persists); a bind on a socket with
+            SO_REUSEADDR set succeeds — the real macOS evidence in manomatika/ahimsa#119."""
             def __init__(self, *a, **kw):
                 self._s = real_socket_cls(*a, **kw)
                 self._reuseaddr = False
@@ -856,10 +850,8 @@ class TestLifecycleAssertions:
             def close(self): return self._s.close()
 
         monkeypatch.setattr(fv.socket, "socket", ResidueSocket)
-        with pytest.raises(AssertionError):
-            fv.assert_abrupt_kill_port_free(MockProc(), 19996)
-        out = capsys.readouterr().out
-        assert "abrupt-kill diag: plain bind FAILED; SO_REUSEADDR bind SUCCEEDED" in out
+        # Must NOT raise: the launcher binds with SO_REUSEADDR, so residue is tolerated.
+        fv.assert_abrupt_kill_port_free(MockProc(), 19996)
 
     def test_abrupt_kill_diag_skips_ps_lsof_off_darwin(self, fv, capsys, monkeypatch):
         """ps/lsof capture is skipped (not failed) on non-macOS runners (e.g. Windows CI)."""
@@ -920,3 +912,100 @@ class TestLifecycleAssertions:
         monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
         with pytest.raises(AssertionError, match="recovery log"):
             fv.assert_double_launch_recovery("fake-exe", 8000, 30)
+
+
+# ---------------------------------------------------------------------------
+# abrupt-kill port-free probe — must MIRROR the real launcher's bind exactly
+# (manomatika/ahimsa#119/#120 mechanism).
+#
+# The frozen app's launcher (matika/launcher.py::_port_available, and its uvicorn
+# listen socket) binds 127.0.0.1 with SO_REUSEADDR. After a SIGKILL macOS leaves
+# the port in a TIME_WAIT teardown window (from the harness's own healthz/double-
+# launch connections): a PLAIN bind is rejected for that whole window even though
+# no process holds the port, while a SO_REUSEADDR bind — the real app's bind —
+# succeeds. The probe must therefore bind the launcher's way: tolerate TIME_WAIT
+# residue the app tolerates, but still detect a real live listener (orphan).
+# ---------------------------------------------------------------------------
+
+def _free_port() -> int:
+    """Reserve then release an ephemeral port so a known number is free to reuse."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
+def _make_time_wait(port: int) -> None:
+    """Leave a genuine TIME_WAIT socket on 127.0.0.1:port (server actively closes).
+
+    Reproduces the macOS post-SIGKILL teardown window: a plain bind is then
+    rejected (EADDRINUSE) while a SO_REUSEADDR bind succeeds — exactly the #119
+    diagnostic signature (lsof LISTEN empty, ps clean, plain-FAIL/reuse-OK).
+    """
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", port))
+    srv.listen(1)
+    cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    cli.connect(("127.0.0.1", port))
+    conn, _ = srv.accept()
+    conn.close()      # active close on the (127.0.0.1, port) side -> TIME_WAIT
+    srv.close()
+    cli.close()
+
+
+def _plain_bind_raises(port: int) -> bool:
+    """True if a PLAIN (no SO_REUSEADDR) bind to 127.0.0.1:port raises (old probe)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", port))
+        return False
+    except OSError:
+        return True
+    finally:
+        s.close()
+
+
+def test_abrupt_kill_probe_tolerates_time_wait_like_the_real_app(fv):
+    """LIVE PROOF: on a TIME_WAIT port the real app could bind, the probe passes.
+
+    Precondition asserts the discriminator is real (a PLAIN bind — the pre-fix
+    probe — is rejected). The fixed probe mirrors the launcher (SO_REUSEADDR) and
+    must return None (bindable), i.e. the assertion would NOT false-positive.
+    Without the fix (plain bind) _probe_port_bindable would itself raise/return the
+    error here, failing the gate exactly as #120 was masking with a retry window.
+    """
+    port = _free_port()
+    _make_time_wait(port)
+    # Discriminator present: the OLD plain-bind probe is rejected on this port.
+    assert _plain_bind_raises(port), (
+        "expected a TIME_WAIT residue that a plain bind rejects; if this fails the "
+        "platform did not form TIME_WAIT and the live-proof is not exercised"
+    )
+    # The FIX: launcher-identical (SO_REUSEADDR) bind tolerates it — app would start.
+    assert fv._probe_port_bindable(port) is None, (
+        "fixed probe must bind a TIME_WAIT port the real launcher (SO_REUSEADDR) "
+        "would bind — a plain-bind probe here is a false positive"
+    )
+
+
+def test_abrupt_kill_probe_detects_real_live_listener(fv):
+    """ORPHAN DETECTION PRESERVED: a real LISTEN socket still fails the probe.
+
+    Mirrors an orphan uvicorn: bound with SO_REUSEADDR and listening (uvicorn sets
+    no SO_REUSEPORT). The launcher-identical probe must NOT bind over it.
+    """
+    port = _free_port()
+    orphan = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    orphan.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    orphan.bind(("127.0.0.1", port))
+    orphan.listen(1)
+    try:
+        exc = fv._probe_port_bindable(port)
+        assert isinstance(exc, OSError), (
+            "a real live listener (orphan) must fail the launcher-identical probe"
+        )
+    finally:
+        orphan.close()
