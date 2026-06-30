@@ -12,7 +12,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 # pyyaml: the release-log validator parses release-log.yaml (fetched from mm) at
 # runtime to build the deleted-tag exemption set, so it is a production dependency.
-dependencies = ["requests", "pyyaml"]
+# psutil: scripts/frozen_verify.py's reclaim-regression check (manomatika/matika#113)
+# suspends/resumes a real frozen-app process and confirms a killed PID is gone.
+dependencies = ["requests", "pyyaml", "psutil"]
 
 [project.optional-dependencies]
 test = ["pytest"]

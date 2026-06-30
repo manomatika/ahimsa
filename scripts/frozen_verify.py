@@ -580,6 +580,182 @@ def assert_double_launch_recovery(exe: str, port: int, timeout: int) -> None:
         shutil.rmtree(b_home, ignore_errors=True)
 
 
+def _pid_truly_gone(pid: int) -> bool:
+    """True if *pid* no longer exists OR is a zombie (terminated but not yet
+    reaped by its real OS parent).
+
+    LIVE-PROOF FINDING: ``psutil.pid_exists(pid)`` alone is NOT sufficient
+    here. Instance B (a separate OS process) force-kills instance A, but
+    THIS script's own ``subprocess.Popen`` handle (inside ``BootedApp``) is
+    A's real parent — until that handle's ``wait()``/``__exit__`` runs, a
+    killed A sits as a zombie, which ``pid_exists`` still reports as
+    "existing". A zombie is dead for every purpose this check cares about
+    (the port is freed, the process does nothing), so it must be treated as
+    gone, not as "still alive — kill failed".
+    """
+    import psutil
+
+    try:
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+
+
+def assert_reclaim_recovers_dead_holder(exe: str, port: int, timeout: int) -> None:
+    """Prove the launcher's health-gated reclaim (manomatika/matika#113).
+
+    Boots instance A, then makes it stop answering HTTP WHILE STILL HOLDING
+    the port — via ``psutil.Process.suspend()``, the closest practical fault
+    injection to a wedged uvicorn available in CI: the real OS process and its
+    LISTEN socket stay intact (a true wedge — e.g. a deadlocked event loop —
+    is not deterministically reproducible here, but presents identically to
+    the launcher: port held, /healthz silent). Then boots instance B at the
+    SAME port and asserts it RECLAIMS: kills the dead holder and comes up
+    healthy itself.
+
+    MANDATE: FAILS against pre-reclaim launcher behavior (instance B treats
+    the unresponsive holder as foreign and exits 1 without ever serving);
+    PASSES against the reclaim feature (instance B logs the reclaim decision,
+    kills instance A, and serves /healthz 200 itself).
+    """
+    import psutil
+
+    a_home = tempfile.mkdtemp(prefix="mm-verify-reclaim-a-")
+    b_home = tempfile.mkdtemp(prefix="mm-verify-reclaim-b-")
+    a_pid: int | None = None
+    try:
+        with BootedApp(exe, a_home, port, timeout) as app_a:
+            a_pid = app_a.proc.pid
+            try:
+                psutil.Process(a_pid).suspend()
+            except psutil.Error as exc:
+                raise AssertionError(
+                    f"reclaim-test: could not suspend instance A (pid {a_pid}) to "
+                    f"simulate an unresponsive-but-port-holding state: {exc}"
+                ) from exc
+            print(f"  · reclaim-test: instance A (pid {a_pid}) suspended — still "
+                  f"holds port {port}, but will no longer answer /healthz")
+
+            try:
+                with BootedApp(exe, b_home, port, timeout) as app_b:
+                    boot_text = app_b.captured_text()
+                    reclaim_keywords = ["reclaim", "force-kill"]
+                    match = next((kw for kw in reclaim_keywords if kw in boot_text), None)
+                    assert match is not None, (
+                        f"reclaim-test: instance B came up but no reclaim log line "
+                        f"found (checked for: {reclaim_keywords!r}); B output:\n{boot_text}"
+                    )
+                    assert _pid_truly_gone(a_pid), (
+                        f"reclaim-test: instance A (pid {a_pid}) is still alive after "
+                        f"instance B started — the dead holder was not actually killed"
+                    )
+                    url = f"http://127.0.0.1:{port}/healthz"
+                    with urllib.request.urlopen(url, timeout=10) as resp:
+                        body = json.loads(resp.read())
+                    assert body.get("product") == "ManoMatika" and body.get("status") == "ok", (
+                        f"reclaim-test: instance B is up but /healthz is not "
+                        f"healthy: {body!r}"
+                    )
+                    print(f"  · reclaim-test: instance B reclaimed the port and is "
+                          f"healthy: {body!r}")
+            except FrozenAppError as exc:
+                raise AssertionError(
+                    f"reclaim-test: instance B did not come up healthy after the "
+                    f"holder was suspended — expected it to RECLAIM (kill the dead "
+                    f"holder and start fresh), not fail: {exc}"
+                ) from exc
+            finally:
+                # A is suspended in BOTH outcomes when control reaches here: the
+                # success case already killed it (no-op resume), the pre-reclaim-
+                # bug case left it suspended-and-alive. Resume so BootedApp.__exit__
+                # (for app_a, entered further up the stack) terminates a normally-
+                # scheduled process rather than relying on signal delivery to a
+                # stopped one.
+                if a_pid is not None and not _pid_truly_gone(a_pid):
+                    with contextlib.suppress(Exception):
+                        psutil.Process(a_pid).resume()
+    finally:
+        shutil.rmtree(a_home, ignore_errors=True)
+        shutil.rmtree(b_home, ignore_errors=True)
+
+
+def assert_foreign_holder_not_killed(exe: str, port: int, timeout: int) -> None:
+    """A real FOREIGN (non-ManoMatika) port holder must NEVER be killed.
+
+    Binds a plain listener — this gate process's own interpreter, not a
+    ManoMatika process by any identifying signal — on the configured port,
+    then launches the frozen app and asserts it fails loud (non-zero exit,
+    the port AND the holder PID named in its output) WITHOUT killing the
+    foreign listener.
+    """
+    foreign = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    foreign.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        foreign.bind(("127.0.0.1", port))
+        foreign.listen(1)
+    except OSError as exc:
+        foreign.close()
+        raise AssertionError(
+            f"foreign-holder-test: could not bind the foreign listener fixture "
+            f"on port {port}: {exc}"
+        ) from exc
+
+    home = tempfile.mkdtemp(prefix="mm-verify-foreign-")
+    try:
+        env = dict(os.environ)
+        env["HOME"] = home
+        env["USERPROFILE"] = home
+        env["BROWSER"] = "true" if os.name != "nt" else "cmd /c rem"
+        proc = subprocess.Popen(
+            [exe], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        try:
+            out_bytes, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out_bytes, _ = proc.communicate()
+            raise AssertionError(
+                f"foreign-holder-test: app did not exit within {timeout}s against "
+                f"a foreign port holder (expected a fast fail-loud exit)"
+            )
+        out = (
+            out_bytes.decode("utf-8", errors="replace")
+            if isinstance(out_bytes, bytes)
+            else (out_bytes or "")
+        )
+
+        assert proc.returncode != 0, (
+            f"foreign-holder-test: app must exit non-zero when a foreign process "
+            f"holds the port, but exited 0; output:\n{out}"
+        )
+        fail_loud_keywords = ["NOT identified as a ManoMatika process", "refusing to kill"]
+        match = next((kw for kw in fail_loud_keywords if kw in out), None)
+        assert match is not None, (
+            f"foreign-holder-test: app exited {proc.returncode} but the fail-loud "
+            f"message didn't name the foreign-holder reason (checked for: "
+            f"{fail_loud_keywords!r}); output:\n{out}"
+        )
+        assert str(port) in out, (
+            f"foreign-holder-test: fail-loud output must name the port {port}; "
+            f"output:\n{out}"
+        )
+        print(f"  · foreign-holder-test: app failed loud (exit {proc.returncode}) "
+              f"without killing the foreign holder: matched {match!r}")
+
+        # The foreign listener must still be alive/bound — never killed.
+        exc = _probe_port_bindable(port)
+        assert exc is not None, (
+            f"foreign-holder-test: the foreign listener on port {port} was "
+            f"unbound/killed — it must NEVER be touched"
+        )
+        print(f"  · foreign-holder-test: foreign listener on port {port} is still "
+              f"held (untouched), as required")
+    finally:
+        with contextlib.suppress(Exception):
+            foreign.close()
+        shutil.rmtree(home, ignore_errors=True)
+
+
 def _probe_port_bindable(port: int) -> "OSError | None":
     """Mirror the REAL launcher's port-free decision EXACTLY.
 
@@ -781,7 +957,12 @@ def scenario_fresh(exe: str, port: int, timeout: int, browser: bool, manifest,
                     assert_healthz_reachable_and_version(port, matika_tag)
                 if matika_tag is not None:
                     assert_double_launch_recovery(exe, port, timeout)
+                # These two run AFTER abrupt-kill frees the port: each needs a
+                # free port to boot its own fixture (a fresh instance A, or a
+                # foreign listener) against (manomatika/matika#113).
                 assert_abrupt_kill_port_free(app.proc, port)
+                assert_reclaim_recovers_dead_holder(exe, port, timeout)
+                assert_foreign_holder_not_killed(exe, port, timeout)
             except Exception:
                 _dump_failure(app)
                 raise
@@ -810,7 +991,12 @@ def scenario_upgrade(exe: str, port: int, timeout: int, browser: bool, manifest,
                 _run_checks(app, browser, manifest)
                 if matika_tag is not None:
                     assert_healthz_reachable_and_version(port, matika_tag)
+                # Same reclaim/foreign-holder coverage as the fresh scenario, run
+                # on the UPGRADED (not first-install) binary too (manomatika/
+                # matika#113 / rule 22 requires both install paths).
                 assert_abrupt_kill_port_free(app.proc, port)
+                assert_reclaim_recovers_dead_holder(exe, port, timeout)
+                assert_foreign_holder_not_killed(exe, port, timeout)
             except Exception:
                 _dump_failure(app)
                 raise
