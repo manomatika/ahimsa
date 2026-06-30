@@ -914,6 +914,359 @@ class TestLifecycleAssertions:
             fv.assert_double_launch_recovery("fake-exe", 8000, 30)
 
 
+class _FakeBootedApp:
+    """Stand-in for BootedApp used by the reclaim-regression tests below —
+    avoids actually launching a frozen binary, mirroring the FakeProc pattern
+    used for assert_double_launch_recovery above."""
+
+    def __init__(self, pid=None, boot_text="", raise_on_enter=None):
+        self.proc = type("P", (), {"pid": pid})()
+        self._boot_text = boot_text
+        self._raise_on_enter = raise_on_enter
+
+    def __call__(self, exe, home, port, timeout):
+        # BootedApp(...) is itself the constructor call; reuse the same
+        # instance as the context manager it returns.
+        return self
+
+    def __enter__(self):
+        if self._raise_on_enter is not None:
+            raise self._raise_on_enter
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def captured_text(self):
+        return self._boot_text
+
+
+class TestPidTrulyGone:
+    """_pid_truly_gone — LIVE-PROOF REGRESSION (rule 22 corollary): the first
+    real-process run of assert_reclaim_recovers_dead_holder false-failed
+    because instance B (a separate OS process) killed instance A, leaving A
+    as a ZOMBIE until THIS script's own subprocess.Popen handle (A's real OS
+    parent) reaps it — and psutil.pid_exists() still reports a zombie as
+    "existing". A killed-but-unreaped zombie must count as gone."""
+
+    def test_zombie_counts_as_gone(self, fv, monkeypatch):
+        import psutil
+        class FakeProcess:
+            def __init__(self, pid):
+                pass
+            def status(self):
+                return psutil.STATUS_ZOMBIE
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+        assert fv._pid_truly_gone(111) is True
+
+    def test_nonexistent_pid_counts_as_gone(self, fv, monkeypatch):
+        import psutil
+        class FakeProcess:
+            def __init__(self, pid):
+                raise psutil.NoSuchProcess(pid)
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+        assert fv._pid_truly_gone(111) is True
+
+    def test_genuinely_running_pid_is_not_gone(self, fv, monkeypatch):
+        import psutil
+        class FakeProcess:
+            def __init__(self, pid):
+                pass
+            def status(self):
+                return psutil.STATUS_RUNNING
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+        assert fv._pid_truly_gone(111) is False
+
+    def test_suspended_pid_is_not_gone(self, fv, monkeypatch):
+        """A suspended (STOPPED) holder is alive — must not be confused with
+        a zombie, or a kill that genuinely failed would be reported as gone."""
+        import psutil
+        class FakeProcess:
+            def __init__(self, pid):
+                pass
+            def status(self):
+                return psutil.STATUS_STOPPED
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+        assert fv._pid_truly_gone(111) is False
+
+
+class TestReclaimRegression:
+    """manomatika/matika#113 — frozen-artifact regression for health-gated
+    startup reclaim. MANDATE: assert_reclaim_recovers_dead_holder must FAIL
+    against pre-reclaim launcher behavior and PASS against the feature;
+    assert_foreign_holder_not_killed must never let a foreign holder be
+    killed regardless of launcher version."""
+
+    def _dispatch_booted_app(self, fv, monkeypatch, fake_a, fake_b):
+        def fake_booted_app(exe, home, port, timeout):
+            return fake_a if "reclaim-a" in home else fake_b
+        monkeypatch.setattr(fv, "BootedApp", fake_booted_app)
+
+    def _patch_homes(self, fv, monkeypatch):
+        monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda prefix=None, **kw: f"/fake/{prefix}")
+        monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
+
+    def _patch_healthz(self, fv, monkeypatch, body):
+        import json
+        import urllib.request
+        class MockResponse:
+            def read(self_):
+                return json.dumps(body).encode()
+            def __enter__(self_):
+                return self_
+            def __exit__(self_, *a):
+                pass
+        monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: MockResponse())
+
+    def test_reclaim_passes_when_b_reclaims_and_is_healthy(self, fv, monkeypatch):
+        import psutil
+        self._patch_homes(fv, monkeypatch)
+        fake_a = _FakeBootedApp(pid=111)
+        fake_b = _FakeBootedApp(
+            pid=222,
+            boot_text="port 8000 held by a dead/unhealthy ManoMatika process "
+                      "(pid 111) -> reclaiming: force-killing and restarting fresh",
+        )
+        self._dispatch_booted_app(fv, monkeypatch, fake_a, fake_b)
+
+        suspended, resumed = [], []
+        class FakeProcess:
+            def __init__(self, pid):
+                self.pid = pid
+            def suspend(self):
+                suspended.append(self.pid)
+            def resume(self):
+                resumed.append(self.pid)
+            def status(self):
+                # A is dead (zombie — unreaped by its real OS parent, the
+                # exact live-proof finding _pid_truly_gone exists to handle).
+                return psutil.STATUS_ZOMBIE
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+        self._patch_healthz(fv, monkeypatch, {"product": "ManoMatika", "status": "ok"})
+
+        fv.assert_reclaim_recovers_dead_holder("fake-exe", 8000, 30)
+        assert suspended == [111]
+        assert resumed == []  # A already dead — resume-for-cleanup is a no-op skip
+
+    def test_reclaim_fails_loud_when_suspend_fails(self, fv, monkeypatch):
+        import psutil
+        self._patch_homes(fv, monkeypatch)
+        fake_a = _FakeBootedApp(pid=111)
+        self._dispatch_booted_app(fv, monkeypatch, fake_a, _FakeBootedApp(pid=222))
+
+        class FakeProcess:
+            def __init__(self, pid):
+                pass
+            def suspend(self):
+                raise psutil.Error("cannot suspend")
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+
+        with pytest.raises(AssertionError, match="could not suspend instance A"):
+            fv.assert_reclaim_recovers_dead_holder("fake-exe", 8000, 30)
+
+    def test_reclaim_fails_when_b_never_comes_up(self, fv, monkeypatch):
+        """Pre-reclaim launcher behavior: B treats the unresponsive holder as
+        foreign and exits 1 immediately — BootedApp.__enter__ raises
+        FrozenAppError before B ever serves. MUST fail loud, not silently pass."""
+        import psutil
+        self._patch_homes(fv, monkeypatch)
+        fake_a = _FakeBootedApp(pid=111)
+        fake_b = _FakeBootedApp(raise_on_enter=fv.FrozenAppError(
+            "process EXITED early (code 1) before the server came up"
+        ))
+        self._dispatch_booted_app(fv, monkeypatch, fake_a, fake_b)
+
+        class FakeProcess:
+            def __init__(self, pid):
+                self.pid = pid
+            def suspend(self):
+                pass
+            def resume(self):
+                pass
+            def status(self):
+                return psutil.STATUS_STOPPED  # A is suspended, genuinely alive
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+
+        with pytest.raises(AssertionError, match="expected it to RECLAIM"):
+            fv.assert_reclaim_recovers_dead_holder("fake-exe", 8000, 30)
+
+    def test_reclaim_fails_when_no_reclaim_log_line(self, fv, monkeypatch):
+        import psutil
+        self._patch_homes(fv, monkeypatch)
+        fake_a = _FakeBootedApp(pid=111)
+        fake_b = _FakeBootedApp(pid=222, boot_text="started server on port 8000\n")
+        self._dispatch_booted_app(fv, monkeypatch, fake_a, fake_b)
+
+        class FakeProcess:
+            def __init__(self, pid):
+                pass
+            def suspend(self):
+                pass
+            def resume(self):
+                pass
+            def status(self):
+                return psutil.STATUS_ZOMBIE
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+
+        with pytest.raises(AssertionError, match="no reclaim log line"):
+            fv.assert_reclaim_recovers_dead_holder("fake-exe", 8000, 30)
+
+    def test_reclaim_fails_when_holder_still_alive(self, fv, monkeypatch):
+        """B came up and logged reclaim, but the dead holder was never
+        actually killed (pid still exists, genuinely running — not a
+        zombie) — must fail, not trust the log."""
+        import psutil
+        self._patch_homes(fv, monkeypatch)
+        fake_a = _FakeBootedApp(pid=111)
+        fake_b = _FakeBootedApp(pid=222, boot_text="-> reclaiming: force-killing and restarting fresh")
+        self._dispatch_booted_app(fv, monkeypatch, fake_a, fake_b)
+
+        class FakeProcess:
+            def __init__(self, pid):
+                self.pid = pid
+            def suspend(self):
+                pass
+            def resume(self):
+                pass
+            def status(self):
+                return psutil.STATUS_RUNNING  # genuinely alive — kill failed
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+
+        with pytest.raises(AssertionError, match="still alive"):
+            fv.assert_reclaim_recovers_dead_holder("fake-exe", 8000, 30)
+
+    def test_reclaim_fails_when_b_healthz_not_healthy(self, fv, monkeypatch):
+        import psutil
+        self._patch_homes(fv, monkeypatch)
+        fake_a = _FakeBootedApp(pid=111)
+        fake_b = _FakeBootedApp(pid=222, boot_text="-> reclaiming: force-killing and restarting fresh")
+        self._dispatch_booted_app(fv, monkeypatch, fake_a, fake_b)
+
+        class FakeProcess:
+            def __init__(self, pid):
+                pass
+            def suspend(self):
+                pass
+            def resume(self):
+                pass
+            def status(self):
+                return psutil.STATUS_ZOMBIE
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+        self._patch_healthz(fv, monkeypatch, {"product": "OtherApp", "status": "ok"})
+
+        with pytest.raises(AssertionError, match="not healthy"):
+            fv.assert_reclaim_recovers_dead_holder("fake-exe", 8000, 30)
+
+    def test_reclaim_resumes_a_for_cleanup_when_still_suspended(self, fv, monkeypatch):
+        """Cleanup discipline: if A is somehow still alive when control
+        returns (e.g. a partial/failed reclaim), it must be resumed so the
+        outer BootedApp teardown can terminate a normally-scheduled process."""
+        import psutil
+        self._patch_homes(fv, monkeypatch)
+        fake_a = _FakeBootedApp(pid=111)
+        fake_b = _FakeBootedApp(pid=222, boot_text="-> reclaiming: force-killing and restarting fresh")
+        self._dispatch_booted_app(fv, monkeypatch, fake_a, fake_b)
+
+        resumed = []
+        class FakeProcess:
+            def __init__(self, pid):
+                self.pid = pid
+            def suspend(self):
+                pass
+            def resume(self):
+                resumed.append(self.pid)
+            def status(self):
+                return psutil.STATUS_STOPPED  # still alive (suspended, not zombie)
+        monkeypatch.setattr(psutil, "Process", FakeProcess)
+
+        with pytest.raises(AssertionError, match="still alive"):
+            fv.assert_reclaim_recovers_dead_holder("fake-exe", 8000, 30)
+        assert resumed == [111]
+
+
+class TestForeignHolderRegression:
+    """manomatika/matika#113 — a real foreign port holder must NEVER be
+    killed by the launcher, regardless of how it handles the conflict."""
+
+    def test_foreign_holder_fails_loud_and_listener_stays_bound(self, fv, monkeypatch, tmp_path):
+        import subprocess as sp
+        port = _free_port()
+        message = (
+            f"port {port} held by pid 4242, which is NOT identified as a "
+            f"ManoMatika process (healthz unreachable); refusing to kill a "
+            f"foreign process — failing loud\n"
+        )
+        class FakeProc:
+            returncode = 1
+            def communicate(self, timeout=None):
+                return message, None
+        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+        monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
+
+        fv.assert_foreign_holder_not_killed("fake-exe", port, 30)
+
+    def test_foreign_holder_fails_when_app_exits_zero(self, fv, monkeypatch, tmp_path):
+        """If the app exits 0 against a foreign holder, that's NOT fail-loud
+        — it must be flagged as a defect, not treated as success."""
+        import subprocess as sp
+        port = _free_port()
+        class FakeProc:
+            returncode = 0
+            def communicate(self, timeout=None):
+                return "started server on port\n", None
+        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+        monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
+
+        with pytest.raises(AssertionError, match="must exit non-zero"):
+            fv.assert_foreign_holder_not_killed("fake-exe", port, 30)
+
+    def test_foreign_holder_fails_when_message_missing_reason(self, fv, monkeypatch, tmp_path):
+        port = _free_port()
+        import subprocess as sp
+        class FakeProc:
+            returncode = 1
+            def communicate(self, timeout=None):
+                return "ERROR: something went wrong\n", None
+        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+        monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
+
+        with pytest.raises(AssertionError, match="didn't name the foreign-holder reason"):
+            fv.assert_foreign_holder_not_killed("fake-exe", port, 30)
+
+    def test_foreign_holder_fails_when_app_hangs(self, fv, monkeypatch, tmp_path):
+        import subprocess as sp
+        port = _free_port()
+        class FakeProc:
+            def communicate(self, timeout=None):
+                if timeout is not None:
+                    raise sp.TimeoutExpired(cmd="exe", timeout=timeout)
+                return "", None  # post-kill reap call
+            def kill(self):
+                pass
+        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+        monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
+
+        with pytest.raises(AssertionError, match="did not exit within"):
+            fv.assert_foreign_holder_not_killed("fake-exe", port, 5)
+
+    def test_foreign_holder_fixture_raises_when_port_unavailable(self, fv, monkeypatch):
+        """If the foreign-listener fixture itself can't bind the test port,
+        that's a test-setup defect, not a pass — must fail loud."""
+        occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        occupied.bind(("127.0.0.1", 0))
+        port = occupied.getsockname()[1]
+        occupied.listen(1)
+        try:
+            with pytest.raises(AssertionError, match="could not bind the foreign listener"):
+                fv.assert_foreign_holder_not_killed("fake-exe", port, 5)
+        finally:
+            occupied.close()
+
+
 # ---------------------------------------------------------------------------
 # abrupt-kill port-free probe — must MIRROR the real launcher's bind exactly
 # (manomatika/ahimsa#119/#120 mechanism).

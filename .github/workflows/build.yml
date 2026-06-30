@@ -336,10 +336,10 @@ jobs:
           EXE="$APP/Contents/MacOS/${PRODUCT_NAME}-${PRODUCT_VERSION}"
           python scripts/smoke_launch.py --exe "$EXE" --expect-plugin eyerate --timeout 90
 
-      - name: Install verification dependencies (requests + Playwright Chromium)
+      - name: Install verification dependencies (requests + Playwright Chromium + psutil)
         shell: bash
         run: |
-          python -m pip install --upgrade requests playwright
+          python -m pip install --upgrade requests playwright psutil
           python -m playwright install chromium
 
       - name: Verify product FEATURES — fresh + upgrade-over-stale (tier a HTTP + tier b browser)
@@ -676,10 +676,10 @@ jobs:
           EXE="$APP/Contents/MacOS/${PRODUCT_NAME}-${PRODUCT_VERSION}"
           python scripts/smoke_launch.py --exe "$EXE" --expect-plugin eyerate --timeout 90
 
-      - name: Install verification dependencies (requests + Playwright Chromium)
+      - name: Install verification dependencies (requests + Playwright Chromium + psutil)
         shell: bash
         run: |
-          python -m pip install --upgrade requests playwright
+          python -m pip install --upgrade requests playwright psutil
           python -m playwright install chromium
 
       - name: Verify product FEATURES — fresh + upgrade-over-stale (tier a HTTP + tier b browser)
@@ -1013,10 +1013,10 @@ jobs:
           EXE="build/matika/dist/${PRODUCT_NAME}-${PRODUCT_VERSION}/${PRODUCT_NAME}-${PRODUCT_VERSION}.exe"
           python scripts/smoke_launch.py --exe "$EXE" --expect-plugin eyerate --timeout 90
 
-      - name: Install verification dependencies (requests + Playwright Chromium)
+      - name: Install verification dependencies (requests + Playwright Chromium + psutil)
         shell: bash
         run: |
-          python -m pip install --upgrade requests playwright
+          python -m pip install --upgrade requests playwright psutil
           python -m playwright install chromium
 
       - name: Verify product FEATURES — fresh + upgrade-over-stale (tier a HTTP + tier b browser)
@@ -1120,10 +1120,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install verification dependencies (requests + Playwright Chromium)
+      - name: Install verification dependencies (requests + Playwright Chromium + psutil)
         shell: bash
         run: |
-          python -m pip install --upgrade requests playwright
+          python -m pip install --upgrade requests playwright psutil
           python -m playwright install chromium
 
       - name: Read recipe metadata
@@ -1299,10 +1299,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install verification dependencies (requests + Playwright Chromium)
+      - name: Install verification dependencies (requests + Playwright Chromium + psutil)
         shell: bash
         run: |
-          python -m pip install --upgrade requests playwright
+          python -m pip install --upgrade requests playwright psutil
           python -m playwright install chromium
 
       - name: Read recipe metadata
@@ -1471,10 +1471,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install verification dependencies (requests + Playwright Chromium)
+      - name: Install verification dependencies (requests + Playwright Chromium + psutil)
         shell: bash
         run: |
-          python -m pip install --upgrade requests playwright
+          python -m pip install --upgrade requests playwright psutil
           python -m playwright install chromium
 
       - name: Read recipe metadata
