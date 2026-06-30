@@ -1,0 +1,55 @@
+name: 'Export AppLug (strip dev scaffolding)'
+description: >
+  Strips dev-only scaffolding (.git, .github, .husky, .gitattributes,
+  .gitignore, node_modules, tests) from every already-cloned/fetched AppLug
+  directory under plugins-dir, then fails loud if any of it leaked into the
+  exported payload. Canonical implementation of the D4 export filter
+  (manomatika/ahimsa#116, manomatika/ahimsa#117), used by every applug-copy
+  site in build.yml (manomatika/ahimsa#122) regardless of whether the AppLug
+  was cloned by tag (build jobs) or fetched by pinned SHA (install-verify
+  jobs) — this action only touches what is already on disk.
+inputs:
+  plugins-dir:
+    description: 'Directory containing one subdirectory per cloned/fetched AppLug'
+    required: false
+    default: 'build/matika/plugins'
+runs:
+  using: composite
+  steps:
+    - name: Strip dev scaffolding from applug payloads
+      shell: bash
+      run: |
+        PLUGINS_DIR="${{ inputs.plugins-dir }}"
+        echo "Stripping dev scaffolding from applug payloads in ${PLUGINS_DIR} (post-checkout)..."
+        for plug_dir in "${PLUGINS_DIR}"/*/; do
+          [ -d "$plug_dir" ] || continue
+          name="$(basename "$plug_dir")"
+          dropped=""
+          for entry in .git .github .husky .gitattributes .gitignore node_modules tests; do
+            target="${plug_dir}${entry}"
+            if [ -e "$target" ] || [ -L "$target" ]; then
+              rm -rf "$target"
+              dropped="${dropped}${entry} "
+            fi
+          done
+          if [ -n "$dropped" ]; then
+            echo "INFO: stripped from ${name}: ${dropped}"
+          else
+            echo "INFO: ${name} had no scaffolding to strip"
+          fi
+        done
+        # Verify: fail loud if any scaffolding leaked through
+        leaked=""
+        for plug_dir in "${PLUGINS_DIR}"/*/; do
+          [ -d "$plug_dir" ] || continue
+          name="$(basename "$plug_dir")"
+          for entry in .git .github .husky .gitattributes .gitignore node_modules tests; do
+            if [ -e "${plug_dir}${entry}" ]; then
+              leaked="${leaked}${name}/${entry} "
+            fi
+          done
+        done
+        if [ -n "$leaked" ]; then
+          echo "ERROR: scaffolding leaked into payload: ${leaked}"
+          exit 1
+        fi
