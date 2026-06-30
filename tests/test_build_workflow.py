@@ -31,6 +31,8 @@ yaml = pytest.importorskip("yaml")
 WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "build.yml"
 REPO_ROOT = Path(__file__).parent.parent
 ISS_FILE = REPO_ROOT / "installer" / "windows_installer.iss"
+EXPORT_APPLUG_ACTION = REPO_ROOT / ".github" / "actions" / "export-applug" / "action.yml"
+EXPORT_APPLUG_USES = "./.github/actions/export-applug"
 
 # Platform build jobs that must each run the full clone → npm → pyinstaller
 # foundation. The release job is excluded — it has no build steps.
@@ -58,6 +60,33 @@ INSTALL_VERIFY_TO_BUILD = {
 @pytest.fixture(scope="module")
 def workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text())
+
+
+@pytest.fixture(scope="module")
+def export_applug_action() -> dict:
+    return yaml.safe_load(EXPORT_APPLUG_ACTION.read_text())
+
+
+@pytest.fixture(scope="module")
+def export_applug_run_text(export_applug_action: dict) -> str:
+    """Concatenate every step's `run:` script in the export-applug composite
+    action — the single canonical implementation of the scaffolding strip
+    (manomatika/ahimsa#122), called from all six applug-copy sites."""
+    return "\n".join(
+        step.get("run", "") for step in export_applug_action["runs"]["steps"]
+    )
+
+
+def _export_applug_step_idx(job: dict) -> int | None:
+    """Index of the step that calls the export-applug composite action, or
+    None if the job has no such step."""
+    return next(
+        (
+            i for i, s in enumerate(job.get("steps", []))
+            if EXPORT_APPLUG_USES in s.get("uses", "")
+        ),
+        None,
+    )
 
 
 def _job_run_blocks(job: dict) -> str:
@@ -748,8 +777,10 @@ def test_install_verify_consumes_build_sha_outputs(workflow, job_name):
 
 
 @pytest.mark.parametrize("job_name", BUILD_JOBS)
-def test_build_job_strips_scaffolding_after_sha_resolution(workflow, job_name):
-    """After SHA resolution, a step must strip .git/.github/etc from plugin dirs."""
+def test_build_job_strips_scaffolding_after_sha_resolution(workflow, export_applug_run_text, job_name):
+    """After SHA resolution, a step must call the export-applug composite
+    action to strip .git/.github/etc from plugin dirs (manomatika/ahimsa#122:
+    the strip logic itself lives once, canonically, in the composite action)."""
     job = workflow["jobs"][job_name]
     steps = job["steps"]
     # Find the SHA resolution step (id: shas)
@@ -758,21 +789,22 @@ def test_build_job_strips_scaffolding_after_sha_resolution(workflow, job_name):
         None,
     )
     assert shas_idx is not None, f"{job_name} must have a step with id: shas"
-    # Find a step AFTER shas that strips scaffolding
-    post_shas_steps = steps[shas_idx + 1:]
-    strip_steps = [
-        s for s in post_shas_steps
-        if ".git" in s.get("run", "") and "rm -rf" in s.get("run", "")
-    ]
-    assert strip_steps, (
-        f"{job_name}: no post-SHA-resolution step strips .git from plugin dirs. "
+    # Find a step AFTER shas that calls the export-applug action
+    export_idx = _export_applug_step_idx(job)
+    assert export_idx is not None, (
+        f"{job_name}: no step calls the export-applug composite action. "
         f"Scaffolding must be removed AFTER SHA resolution (which reads .git), "
         f"BEFORE PyInstaller bundles the plugins."
     )
-    # Verify it covers the known scaffolding entries
-    run_text = " ".join(s.get("run", "") for s in strip_steps)
+    assert export_idx > shas_idx, (
+        f"{job_name}: export-applug step (idx {export_idx}) must run after "
+        f"SHA resolution (idx {shas_idx})"
+    )
+    # Verify the canonical implementation covers the known scaffolding entries
     for entry in [".git", ".github", ".gitignore"]:
-        assert entry in run_text, f"{job_name} strip step does not remove {entry}"
+        assert entry in export_applug_run_text, (
+            f"export-applug action does not remove {entry}"
+        )
 
 
 @pytest.mark.parametrize("job_name", BUILD_JOBS)
@@ -780,15 +812,12 @@ def test_build_job_strip_is_before_pyinstaller(workflow, job_name):
     """The scaffolding strip must run before PyInstaller bundles the plugins."""
     job = workflow["jobs"][job_name]
     steps = job["steps"]
-    strip_idx = next(
-        (i for i, s in enumerate(steps) if ".git" in s.get("run", "") and "rm -rf" in s.get("run", "")),
-        None,
-    )
+    strip_idx = _export_applug_step_idx(job)
     pyinstaller_idx = next(
         (i for i, s in enumerate(steps) if "pyinstaller matika.spec" in s.get("run", "")),
         None,
     )
-    assert strip_idx is not None, f"{job_name}: no scaffolding strip step found"
+    assert strip_idx is not None, f"{job_name}: no export-applug step found"
     assert pyinstaller_idx is not None, f"{job_name}: no pyinstaller step found"
     assert strip_idx < pyinstaller_idx, (
         f"{job_name}: strip step (idx {strip_idx}) must precede pyinstaller step (idx {pyinstaller_idx})"
@@ -796,36 +825,39 @@ def test_build_job_strip_is_before_pyinstaller(workflow, job_name):
 
 
 @pytest.mark.parametrize("job_name", INSTALL_VERIFY_JOBS)
-def test_install_verify_job_strips_scaffolding_after_checkout(workflow, job_name):
-    """Install-verify jobs must strip scaffolding from the side-clone immediately after checkout."""
+def test_install_verify_job_strips_scaffolding_after_checkout(workflow, export_applug_run_text, job_name):
+    """Install-verify jobs must strip scaffolding from the side-clone immediately after checkout,
+    via the same canonical export-applug composite action the build jobs use."""
     job = workflow["jobs"][job_name]
     # Find the applug checkout step
-    checkout_steps = [
-        s for s in job["steps"]
-        if "APPLUG_SHAS" in s.get("env", {}) or "FETCH_HEAD" in s.get("run", "")
-    ]
-    assert checkout_steps, f"{job_name}: no applug checkout step found"
-    # The step must include scaffolding removal
-    run_text = " ".join(s.get("run", "") for s in checkout_steps)
-    assert ".git" in run_text and ("rm" in run_text or "rmtree" in run_text), (
-        f"{job_name}: applug checkout step must strip .git after checkout"
+    checkout_idx = next(
+        (
+            i for i, s in enumerate(job["steps"])
+            if "APPLUG_SHAS" in s.get("env", {}) or "FETCH_HEAD" in s.get("run", "")
+        ),
+        None,
+    )
+    assert checkout_idx is not None, f"{job_name}: no applug checkout step found"
+    # A step calling the export-applug action must follow the checkout
+    export_idx = _export_applug_step_idx(job)
+    assert export_idx is not None, (
+        f"{job_name}: no step calls the export-applug composite action"
+    )
+    assert export_idx > checkout_idx, (
+        f"{job_name}: export-applug step (idx {export_idx}) must run after "
+        f"the applug checkout step (idx {checkout_idx})"
+    )
+    assert ".git" in export_applug_run_text, (
+        f"{job_name}: export-applug action must strip .git after checkout"
     )
 
 
-@pytest.mark.parametrize("job_name", BUILD_JOBS)
-def test_strip_step_fails_loud_on_leaked_scaffolding(workflow, job_name):
-    """The strip step must exit 1 if scaffolding leaked through (fail-loud mandate)."""
-    job = workflow["jobs"][job_name]
-    # Find the strip step
-    strip_steps = [
-        s for s in job["steps"]
-        if ".git" in s.get("run", "") and "rm -rf" in s.get("run", "")
-    ]
-    assert strip_steps
-    run_text = " ".join(s.get("run", "") for s in strip_steps)
-    # Must exit nonzero on leaked scaffolding
-    assert "exit 1" in run_text or "ERROR" in run_text, (
-        "strip step must fail loud (exit 1) if scaffolding leaked into payload"
+def test_strip_step_fails_loud_on_leaked_scaffolding(export_applug_run_text):
+    """The canonical export-applug strip step must exit 1 if scaffolding leaked
+    through (fail-loud mandate) — checked once since all six call sites share
+    this one implementation (manomatika/ahimsa#122)."""
+    assert "exit 1" in export_applug_run_text or "ERROR" in export_applug_run_text, (
+        "export-applug action must fail loud (exit 1) if scaffolding leaked into payload"
     )
 
 
