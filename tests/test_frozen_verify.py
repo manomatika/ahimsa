@@ -744,6 +744,7 @@ class TestLifecycleAssertions:
         """assert_abrupt_kill_port_free fails when port is still in use after kill."""
         import subprocess, socket as _socket, time
         class MockProc:
+            pid = 99999
             returncode = None
             def kill(self): self.returncode = -9
             def wait(self, timeout=None): pass
@@ -759,6 +760,85 @@ class TestLifecycleAssertions:
                 fv.assert_abrupt_kill_port_free(MockProc(), test_port)
         finally:
             s.close()
+
+    def test_abrupt_kill_diag_captures_pid_and_so_reuseaddr_failed(self, fv, capsys):
+        """On a real orphan (live listener), diag logs proc.pid/poll and SO_REUSEADDR FAILED."""
+        import socket as _socket
+        class MockProc:
+            pid = 424242
+            returncode = None
+            def kill(self): self.returncode = -9
+            def wait(self, timeout=None): pass
+            def poll(self): return self.returncode
+        test_port = 19997
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", test_port))
+            s.listen(1)
+            with pytest.raises(AssertionError):
+                fv.assert_abrupt_kill_port_free(MockProc(), test_port)
+        finally:
+            s.close()
+        out = capsys.readouterr().out
+        assert "DIAG: abrupt-kill: launched proc.pid=424242 proc.poll()=-9" in out
+        assert "abrupt-kill diag: plain bind FAILED; SO_REUSEADDR bind FAILED" in out
+
+    def test_abrupt_kill_diag_so_reuseaddr_succeeds_when_only_residue(self, fv, capsys, monkeypatch):
+        """If only the plain bind fails (residue) but SO_REUSEADDR bind would succeed, diag says so."""
+        import socket as _socket
+        class MockProc:
+            pid = 555
+            returncode = None
+            def kill(self): self.returncode = -9
+            def wait(self, timeout=None): pass
+            def poll(self): return self.returncode
+
+        real_socket_cls = _socket.socket
+        call_count = {"n": 0}
+
+        class FlakyBindSocket:
+            """First bind() (the harness's plain, no-REUSEADDR probe) raises; all others succeed."""
+            def __init__(self, *a, **kw):
+                self._s = real_socket_cls(*a, **kw)
+                call_count["n"] += 1
+                self._is_first = call_count["n"] == 1
+            def bind(self, addr):
+                if self._is_first:
+                    raise OSError(48, "Address already in use")
+                return self._s.bind(addr)
+            def setsockopt(self, *a, **kw): return self._s.setsockopt(*a, **kw)
+            def close(self): return self._s.close()
+
+        monkeypatch.setattr(fv.socket, "socket", FlakyBindSocket)
+        with pytest.raises(AssertionError):
+            fv.assert_abrupt_kill_port_free(MockProc(), 19996)
+        out = capsys.readouterr().out
+        assert "abrupt-kill diag: plain bind FAILED; SO_REUSEADDR bind SUCCEEDED" in out
+
+    def test_abrupt_kill_diag_skips_ps_lsof_off_darwin(self, fv, capsys, monkeypatch):
+        """ps/lsof capture is skipped (not failed) on non-macOS runners (e.g. Windows CI)."""
+        import socket as _socket
+        class MockProc:
+            pid = 1
+            returncode = None
+            def kill(self): self.returncode = -9
+            def wait(self, timeout=None): pass
+            def poll(self): return self.returncode
+        monkeypatch.setattr(fv.sys, "platform", "win32")
+        test_port = 19995
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", test_port))
+            s.listen(1)
+            with pytest.raises(AssertionError):
+                fv.assert_abrupt_kill_port_free(MockProc(), test_port)
+        finally:
+            s.close()
+        out = capsys.readouterr().out
+        assert "ps/lsof capture skipped (not macOS)" in out
+        assert "ps -ax" not in out
 
     def test_double_launch_recovery_passes_on_exit_zero(self, fv, tmp_path, monkeypatch):
         """assert_double_launch_recovery passes when second launch exits 0 with recovery log."""

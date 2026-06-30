@@ -594,6 +594,76 @@ def assert_abrupt_kill_port_free(proc: "subprocess.Popen[bytes]", port: int) -> 
 
     time.sleep(1.0)
 
+    def _capture_diagnostics(port_: int) -> None:
+        """Best-effort OS-state capture for diagnosing an abrupt-kill bind failure.
+
+        Settles two competing explanations: (1) harness false-positive — the
+        launched process IS reaped and the plain (no-SO_REUSEADDR) bind is
+        rejecting transient kernel socket residue the real app would tolerate —
+        vs (2) a real orphan still holds the port. Each probe is independently
+        wrapped so a missing tool (ps/lsof may not exist on the Windows runner)
+        never masks the original assertion below.
+        """
+        print(f"DIAG: abrupt-kill: launched proc.pid={proc.pid} proc.poll()={proc.poll()}")
+
+        if sys.platform == "darwin":
+            try:
+                ps_out = subprocess.run(
+                    ["ps", "-ax", "-o", "pid,ppid,pgid,stat,command"],
+                    capture_output=True, text=True, timeout=10,
+                ).stdout
+                lines = ps_out.splitlines()
+                header, body = (lines[0], lines[1:]) if lines else ("", [])
+                related = [header] if header else []
+                for line in body:
+                    fields = line.split(None, 4)
+                    if len(fields) < 5:
+                        continue
+                    pid_s, ppid_s = fields[0], fields[1]
+                    if "ManoMatika" in line or pid_s == str(proc.pid) or ppid_s == str(proc.pid):
+                        related.append(line)
+                print("DIAG: abrupt-kill: ps -ax -o pid,ppid,pgid,stat,command "
+                      "(ManoMatika / launched-pid-and-children lines):")
+                for line in (related or ["  (no matching ps lines)"]):
+                    print(f"DIAG:   {line}")
+            except Exception as exc:
+                print(f"DIAG: abrupt-kill: ps capture unavailable: {exc!r}")
+
+            for cmd, label in (
+                (["lsof", "-nP", f"-iTCP:{port_}"], "all"),
+                (["lsof", "-nP", f"-iTCP:{port_}", "-sTCP:LISTEN"], "LISTEN-only"),
+            ):
+                try:
+                    lsof_out = subprocess.run(
+                        cmd, capture_output=True, text=True, timeout=10,
+                    ).stdout
+                    print(f"DIAG: abrupt-kill: lsof -iTCP:{port_} ({label}):")
+                    for line in (lsof_out.splitlines() or ["  (no output — nothing matched)"]):
+                        print(f"DIAG:   {line}")
+                except Exception as exc:
+                    print(f"DIAG: abrupt-kill: lsof ({label}) capture unavailable: {exc!r}")
+        else:
+            print("DIAG: abrupt-kill: ps/lsof capture skipped (not macOS)")
+
+        reuseaddr_result = "FAILED"
+        reuseaddr_exc: Exception | None = None
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind(("127.0.0.1", port_))
+                reuseaddr_result = "SUCCEEDED"
+            except OSError as exc:
+                reuseaddr_exc = exc
+            finally:
+                with contextlib.suppress(Exception):
+                    probe.close()
+        except Exception as exc:
+            reuseaddr_exc = exc
+        print(f"DIAG: abrupt-kill diag: plain bind FAILED; SO_REUSEADDR bind {reuseaddr_result}")
+        if reuseaddr_exc is not None:
+            print(f"DIAG:   SO_REUSEADDR bind exception: {reuseaddr_exc!r}")
+
     def _try_bind(port_: int, elapsed_label: str) -> None:
         # No SO_REUSEADDR: a listening server (uvicorn) holds the port even with REUSEADDR,
         # and we want to detect that. A plain bind fails on a live listener.
@@ -601,6 +671,7 @@ def assert_abrupt_kill_port_free(proc: "subprocess.Popen[bytes]", port: int) -> 
         try:
             s.bind(("127.0.0.1", port_))
         except OSError as exc:
+            _capture_diagnostics(port_)
             raise AssertionError(
                 f"ERROR: abrupt-kill: port {port_} still in use {elapsed_label}s "
                 f"after SIGKILL — possible orphan or respawn! ({exc})"
