@@ -679,81 +679,165 @@ def assert_reclaim_recovers_dead_holder(exe: str, port: int, timeout: int) -> No
         shutil.rmtree(b_home, ignore_errors=True)
 
 
+def _port_reachable(port: int, timeout: float = 0.5) -> bool:
+    """True if a connect() to 127.0.0.1:port succeeds (something is LISTENing).
+
+    Mirrors the matika launcher's own connect()-based held-signal
+    (``_port_held`` in launcher.py) — used here only to confirm a fixture
+    process this gate spawned is up-and-listening, or is still reachable
+    after the app-under-test exits. This is NOT a stand-in for
+    ``_probe_port_bindable`` (used by the abrupt-kill assertion to prove a
+    FRESH bind succeeds): that is a different question with different OS
+    TIME_WAIT semantics that a connect() probe cannot answer, and a bind-based
+    "is it still held" check has the same SO_REUSEADDR foot-gun the launcher
+    fix (matika rc.14) removed — a second SO_REUSEADDR bind can succeed over
+    an ACTIVE listener on macOS/Windows, which would make a bind-based check
+    here falsely report a live foreign holder as unbound.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        try:
+            s.connect(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
+def _spawn_foreign_port_holder(port: int, timeout: float = 10.0) -> "subprocess.Popen[bytes]":
+    """Spawn an INDEPENDENT, non-ManoMatika sibling process that binds and
+    listen()s *port* and idles, standing in for a real foreign port holder.
+
+    Spawned via ``subprocess.Popen`` as a top-level sibling of the
+    app-under-test — the same shape as the reclaim
+    (``assert_reclaim_recovers_dead_holder``) and double-launch
+    (``assert_double_launch_recovery``) fixtures, both of which spawn
+    independent processes rather than holding a socket in THIS driver's own
+    process. A holder opened in the driver's own process sits in a different
+    position (the direct PARENT of the app-under-test) than any real-world
+    foreign holder (an unrelated top-level process) — a harness artifact this
+    replaces so the assertion exercises what the launcher actually has to
+    detect: a genuinely independent, psutil-visible sibling.
+
+    Deliberately runs as THIS gate driver's own Python interpreter
+    (``sys.executable``) — never the frozen ManoMatika binary — so the
+    launcher's ``_is_manomatika_process`` positively identifies it as
+    foreign, exercising the "refusing to kill a foreign holder" path.
+    """
+    script = (
+        "import socket, time\n"
+        "s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+        "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+        f"s.bind(('127.0.0.1', {port}))\n"
+        "s.listen(5)\n"
+        "while True:\n"
+        "    time.sleep(3600)\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", script])
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise AssertionError(
+                f"foreign-holder-test: the sibling holder process (pid {proc.pid}) "
+                f"exited early (code {proc.returncode}) before binding port {port}"
+            )
+        if _port_reachable(port, timeout=0.2):
+            return proc
+        time.sleep(0.1)
+    with contextlib.suppress(Exception):
+        proc.kill()
+        proc.wait(timeout=10)
+    raise AssertionError(
+        f"foreign-holder-test: the sibling holder process never bound/listened "
+        f"on port {port} within {timeout}s"
+    )
+
+
+def _terminate_foreign_holder(proc: "subprocess.Popen[bytes]") -> None:
+    """Guaranteed-run teardown for the sibling spawned by
+    _spawn_foreign_port_holder — always terminate it regardless of whether the
+    assertion passed or failed (the fixture resets what it spawned)."""
+    with contextlib.suppress(Exception):
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+
+
 def assert_foreign_holder_not_killed(exe: str, port: int, timeout: int) -> None:
     """A real FOREIGN (non-ManoMatika) port holder must NEVER be killed.
 
-    Binds a plain listener — this gate process's own interpreter, not a
-    ManoMatika process by any identifying signal — on the configured port,
-    then launches the frozen app and asserts it fails loud (non-zero exit,
-    the port AND the holder PID named in its output) WITHOUT killing the
-    foreign listener.
+    Spawns an INDEPENDENT, non-ManoMatika sibling process (see
+    ``_spawn_foreign_port_holder``) that binds and listen()s the configured
+    port and idles, then launches the frozen app and asserts it fails loud
+    (non-zero exit, the port AND the fail-loud foreign-holder reason named in
+    its output) WITHOUT killing the foreign listener.
     """
-    foreign = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    foreign.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    holder = _spawn_foreign_port_holder(port)
     try:
-        foreign.bind(("127.0.0.1", port))
-        foreign.listen(1)
-    except OSError as exc:
-        foreign.close()
-        raise AssertionError(
-            f"foreign-holder-test: could not bind the foreign listener fixture "
-            f"on port {port}: {exc}"
-        ) from exc
-
-    home = tempfile.mkdtemp(prefix="mm-verify-foreign-")
-    try:
-        env = dict(os.environ)
-        env["HOME"] = home
-        env["USERPROFILE"] = home
-        env["BROWSER"] = "true" if os.name != "nt" else "cmd /c rem"
-        proc = subprocess.Popen(
-            [exe], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        )
+        home = tempfile.mkdtemp(prefix="mm-verify-foreign-")
         try:
-            out_bytes, _ = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            out_bytes, _ = proc.communicate()
-            raise AssertionError(
-                f"foreign-holder-test: app did not exit within {timeout}s against "
-                f"a foreign port holder (expected a fast fail-loud exit)"
+            env = dict(os.environ)
+            env["HOME"] = home
+            env["USERPROFILE"] = home
+            env["BROWSER"] = "true" if os.name != "nt" else "cmd /c rem"
+            proc = subprocess.Popen(
+                [exe], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             )
-        out = (
-            out_bytes.decode("utf-8", errors="replace")
-            if isinstance(out_bytes, bytes)
-            else (out_bytes or "")
-        )
+            try:
+                out_bytes, _ = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out_bytes, _ = proc.communicate()
+                raise AssertionError(
+                    f"foreign-holder-test: app did not exit within {timeout}s against "
+                    f"a foreign port holder (expected a fast fail-loud exit)"
+                )
+            out = (
+                out_bytes.decode("utf-8", errors="replace")
+                if isinstance(out_bytes, bytes)
+                else (out_bytes or "")
+            )
 
-        assert proc.returncode != 0, (
-            f"foreign-holder-test: app must exit non-zero when a foreign process "
-            f"holds the port, but exited 0; output:\n{out}"
-        )
-        fail_loud_keywords = ["NOT identified as a ManoMatika process", "refusing to kill"]
-        match = next((kw for kw in fail_loud_keywords if kw in out), None)
-        assert match is not None, (
-            f"foreign-holder-test: app exited {proc.returncode} but the fail-loud "
-            f"message didn't name the foreign-holder reason (checked for: "
-            f"{fail_loud_keywords!r}); output:\n{out}"
-        )
-        assert str(port) in out, (
-            f"foreign-holder-test: fail-loud output must name the port {port}; "
-            f"output:\n{out}"
-        )
-        print(f"  · foreign-holder-test: app failed loud (exit {proc.returncode}) "
-              f"without killing the foreign holder: matched {match!r}")
+            assert proc.returncode != 0, (
+                f"foreign-holder-test: app must exit non-zero when a foreign process "
+                f"holds the port, but exited 0; output:\n{out}"
+            )
+            fail_loud_keywords = ["NOT identified as a ManoMatika process", "refusing to kill"]
+            match = next((kw for kw in fail_loud_keywords if kw in out), None)
+            assert match is not None, (
+                f"foreign-holder-test: app exited {proc.returncode} but the fail-loud "
+                f"message didn't name the foreign-holder reason (checked for: "
+                f"{fail_loud_keywords!r}); output:\n{out}"
+            )
+            assert str(port) in out, (
+                f"foreign-holder-test: fail-loud output must name the port {port}; "
+                f"output:\n{out}"
+            )
+            print(f"  · foreign-holder-test: app failed loud (exit {proc.returncode}) "
+                  f"without killing the foreign holder: matched {match!r}")
 
-        # The foreign listener must still be alive/bound — never killed.
-        exc = _probe_port_bindable(port)
-        assert exc is not None, (
-            f"foreign-holder-test: the foreign listener on port {port} was "
-            f"unbound/killed — it must NEVER be touched"
-        )
-        print(f"  · foreign-holder-test: foreign listener on port {port} is still "
-              f"held (untouched), as required")
+            # The foreign holder — a genuinely independent process — must still be
+            # alive AND still listening. Checked directly against the spawned
+            # process (poll()) plus a connect() probe, not a fresh bind probe: a
+            # bind-based probe with SO_REUSEADDR can itself succeed over an ACTIVE
+            # listener on macOS/Windows (the exact foot-gun matika rc.14 removed
+            # from the launcher), so it is not a reliable "was it killed?" signal.
+            assert holder.poll() is None, (
+                f"foreign-holder-test: the foreign holder process (pid {holder.pid}) "
+                f"on port {port} exited — it must NEVER be touched"
+            )
+            assert _port_reachable(port), (
+                f"foreign-holder-test: the foreign listener on port {port} is no "
+                f"longer reachable — it must NEVER be unbound/killed"
+            )
+            print(f"  · foreign-holder-test: foreign listener (pid {holder.pid}) on "
+                  f"port {port} is still held (untouched), as required")
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
     finally:
-        with contextlib.suppress(Exception):
-            foreign.close()
-        shutil.rmtree(home, ignore_errors=True)
+        _terminate_foreign_holder(holder)
 
 
 def _probe_port_bindable(port: int) -> "OSError | None":
