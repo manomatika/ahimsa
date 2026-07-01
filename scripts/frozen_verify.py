@@ -765,14 +765,37 @@ def _terminate_foreign_holder(proc: "subprocess.Popen[bytes]") -> None:
             proc.wait(timeout=10)
 
 
+# A foreign-holder conflict is decided EARLY in the launcher (before any
+# first-run init / DB / plugin work) and now FAILS LOUD to stderr with no
+# blocking modal, so the app exits within a few seconds. This bound asserts
+# that FAST exit explicitly: the ~120s "did not exit within timeout" signature
+# was a modal Tk dialog blocking on the CI runners' window server (matika
+# manomatika/matika#116 root cause), and a slow-but-eventual exit anywhere in
+# the [limit, timeout] window would still signal a blocking surface or wasted
+# boot work. Generous over the observed ~6-10s fail-loud so it is not flaky on a
+# cold Windows runner, yet far under the 120s gate budget.
+_FAST_FAIL_LOUD_LIMIT_S = 30.0
+
+
 def assert_foreign_holder_not_killed(exe: str, port: int, timeout: int) -> None:
-    """A real FOREIGN (non-ManoMatika) port holder must NEVER be killed.
+    """A real FOREIGN (non-ManoMatika) port holder must NEVER be killed, and the
+    app must FAIL LOUD FAST — never block.
 
     Spawns an INDEPENDENT, non-ManoMatika sibling process (see
     ``_spawn_foreign_port_holder``) that binds and listen()s the configured
-    port and idles, then launches the frozen app and asserts it fails loud
-    (non-zero exit, the port AND the fail-loud foreign-holder reason named in
-    its output) WITHOUT killing the foreign listener.
+    port and idles, then launches the frozen app and asserts it:
+      (i)   kills NOTHING — the foreign listener is still alive and reachable
+            after the app exits;
+      (ii)  exits NON-ZERO and FAST — well under the ``timeout`` budget
+            (``_FAST_FAIL_LOUD_LIMIT_S``), proving there is no blocking modal
+            dialog (the ~120s "did not exit within timeout" hang) and no wasted
+            boot work on a doomed port;
+      (iii) emits a fail-loud message naming the port AND the foreign-holder
+            reason.
+
+    Since the matika launcher's foreign path now only logs + exits (no kill
+    logic remains on it, and its error dialog is gated behind an interactive /
+    display check), this assertion passes by construction on the fixed launcher.
     """
     holder = _spawn_foreign_port_holder(port)
     try:
@@ -782,6 +805,7 @@ def assert_foreign_holder_not_killed(exe: str, port: int, timeout: int) -> None:
             env["HOME"] = home
             env["USERPROFILE"] = home
             env["BROWSER"] = "true" if os.name != "nt" else "cmd /c rem"
+            start = time.monotonic()
             proc = subprocess.Popen(
                 [exe], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             )
@@ -794,6 +818,7 @@ def assert_foreign_holder_not_killed(exe: str, port: int, timeout: int) -> None:
                     f"foreign-holder-test: app did not exit within {timeout}s against "
                     f"a foreign port holder (expected a fast fail-loud exit)"
                 )
+            elapsed = time.monotonic() - start
             out = (
                 out_bytes.decode("utf-8", errors="replace")
                 if isinstance(out_bytes, bytes)
@@ -803,6 +828,14 @@ def assert_foreign_holder_not_killed(exe: str, port: int, timeout: int) -> None:
             assert proc.returncode != 0, (
                 f"foreign-holder-test: app must exit non-zero when a foreign process "
                 f"holds the port, but exited 0; output:\n{out}"
+            )
+            fast_limit = min(_FAST_FAIL_LOUD_LIMIT_S, timeout)
+            assert elapsed < fast_limit, (
+                f"foreign-holder-test: app exited {proc.returncode} but took "
+                f"{elapsed:.1f}s — a foreign-holder conflict must FAIL LOUD FAST "
+                f"(under {fast_limit:.0f}s, well within the {timeout}s budget); a "
+                f"slow exit signals a blocking modal dialog or wasted boot work "
+                f"over a doomed port. output:\n{out}"
             )
             fail_loud_keywords = ["NOT identified as a ManoMatika process", "refusing to kill"]
             match = next((kw for kw in fail_loud_keywords if kw in out), None)
@@ -816,7 +849,7 @@ def assert_foreign_holder_not_killed(exe: str, port: int, timeout: int) -> None:
                 f"output:\n{out}"
             )
             print(f"  · foreign-holder-test: app failed loud (exit {proc.returncode}) "
-                  f"without killing the foreign holder: matched {match!r}")
+                  f"in {elapsed:.1f}s without killing the foreign holder: matched {match!r}")
 
             # The foreign holder — a genuinely independent process — must still be
             # alive AND still listening. Checked directly against the spawned

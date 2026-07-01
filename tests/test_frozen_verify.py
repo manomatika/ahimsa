@@ -1406,3 +1406,106 @@ def test_abrupt_kill_probe_detects_real_live_listener(fv):
         )
     finally:
         orphan.close()
+
+
+# ---------------------------------------------------------------------------
+# assert_foreign_holder_not_killed — reconciled to the NEW launcher behavior:
+# a foreign holder is NOT killed, and the app FAILS LOUD FAST (well under the
+# timeout budget — no blocking modal). These tests PROVE the assertion is not
+# vacuous: each clause must FAIL on a deliberately-wrong fake app and PASS on a
+# faithful one, exercising the real assertion against real spawned processes and
+# a real foreign listener (not mocks). This is the escape's own layer: the
+# ~120s modal-block hang lived here, in the frozen-artifact gate.
+# ---------------------------------------------------------------------------
+def _free_tcp_port() -> int:
+    """Return a currently-free localhost TCP port (bind-to-0 then release)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _write_fake_app(tmp_path: Path, *, message: str, exit_code: int,
+                    sleep_s: float = 0.0) -> str:
+    """Write a directly-executable fake 'frozen app' that (optionally sleeps,
+    then) writes *message* to stderr and exits with *exit_code*, WITHOUT ever
+    touching the foreign holder. Stands in for the launcher so the assertion's
+    own pass/fail logic can be exercised deterministically."""
+    script = tmp_path / "fake_app.py"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, time\n"
+        f"time.sleep({sleep_s!r})\n"
+        f"sys.stderr.write({message!r})\n"
+        "sys.stderr.flush()\n"
+        f"sys.exit({exit_code})\n"
+    )
+    script.chmod(0o755)
+    return str(script)
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="fake-app shebang-exec is POSIX-only; the ahimsa unit suite runs on ubuntu",
+)
+class TestAssertForeignHolderNotKilled:
+    """Prove-it-live at the gate-assertion layer (rule 22 / rule 31 corollary)."""
+
+    def test_passes_on_fast_fail_loud_that_leaves_holder_alive(self, fv, tmp_path):
+        port = _free_tcp_port()
+        exe = _write_fake_app(
+            tmp_path,
+            message=(
+                f"ERROR: port {port} held by pid 999, which is NOT identified as a "
+                f"ManoMatika process; refusing to kill a foreign process — failing loud"
+            ),
+            exit_code=1,
+        )
+        # Must NOT raise: faithful fast fail-loud, non-zero, names port + reason,
+        # and the fake never touches the holder.
+        fv.assert_foreign_holder_not_killed(exe, port, timeout=30)
+
+    def test_fails_when_app_exits_zero(self, fv, tmp_path):
+        port = _free_tcp_port()
+        exe = _write_fake_app(
+            tmp_path,
+            message=f"port {port} NOT identified as a ManoMatika process; refusing to kill",
+            exit_code=0,
+        )
+        with pytest.raises(AssertionError, match="must exit non-zero"):
+            fv.assert_foreign_holder_not_killed(exe, port, timeout=30)
+
+    def test_fails_when_reason_keyword_absent(self, fv, tmp_path):
+        port = _free_tcp_port()
+        exe = _write_fake_app(
+            tmp_path,
+            message=f"port {port} is busy, giving up",  # non-zero but no foreign reason
+            exit_code=1,
+        )
+        with pytest.raises(AssertionError, match="foreign-holder reason"):
+            fv.assert_foreign_holder_not_killed(exe, port, timeout=30)
+
+    def test_fails_when_port_not_named(self, fv, tmp_path):
+        port = _free_tcp_port()
+        exe = _write_fake_app(
+            tmp_path,
+            message="a process is NOT identified as a ManoMatika process; refusing to kill",
+            exit_code=1,
+        )
+        with pytest.raises(AssertionError, match=f"must name the port {port}"):
+            fv.assert_foreign_holder_not_killed(exe, port, timeout=30)
+
+    def test_fails_when_exit_is_slow(self, fv, tmp_path, monkeypatch):
+        """A non-zero exit with the right message but a SLOW exit (the modal-block
+        signature, scaled down) must still FAIL the reconciled fast-exit clause."""
+        monkeypatch.setattr(fv, "_FAST_FAIL_LOUD_LIMIT_S", 0.2)
+        port = _free_tcp_port()
+        exe = _write_fake_app(
+            tmp_path,
+            message=(
+                f"port {port} NOT identified as a ManoMatika process; refusing to kill"
+            ),
+            exit_code=1,
+            sleep_s=1.0,  # > the patched 0.2s fast limit, < the 30s timeout budget
+        )
+        with pytest.raises(AssertionError, match="FAIL LOUD FAST"):
+            fv.assert_foreign_holder_not_killed(exe, port, timeout=30)
