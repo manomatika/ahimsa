@@ -1184,12 +1184,29 @@ class TestReclaimRegression:
         assert resumed == [111]
 
 
+def _dispatching_popen(monkeypatch, app_proc_factory):
+    """Patch subprocess.Popen so a call launching the REAL foreign-holder
+    sibling (``sys.executable -c ...``, spawned by
+    ``_spawn_foreign_port_holder``) goes through to the real Popen — the
+    faithful fixture needs a genuinely independent, listening process — while
+    any OTHER call (the app-under-test, which isn't available in the unit-
+    test environment) returns ``app_proc_factory()``'s fake process."""
+    import subprocess as sp
+    real_popen = sp.Popen
+
+    def dispatch(cmd, *a, **kw):
+        if isinstance(cmd, list) and cmd[:1] == [sys.executable]:
+            return real_popen(cmd, *a, **kw)
+        return app_proc_factory()
+
+    monkeypatch.setattr(sp, "Popen", dispatch)
+
+
 class TestForeignHolderRegression:
     """manomatika/matika#113 — a real foreign port holder must NEVER be
     killed by the launcher, regardless of how it handles the conflict."""
 
     def test_foreign_holder_fails_loud_and_listener_stays_bound(self, fv, monkeypatch, tmp_path):
-        import subprocess as sp
         port = _free_port()
         message = (
             f"port {port} held by pid 4242, which is NOT identified as a "
@@ -1200,7 +1217,7 @@ class TestForeignHolderRegression:
             returncode = 1
             def communicate(self, timeout=None):
                 return message, None
-        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        _dispatching_popen(monkeypatch, FakeProc)
         monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
         monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
 
@@ -1209,13 +1226,12 @@ class TestForeignHolderRegression:
     def test_foreign_holder_fails_when_app_exits_zero(self, fv, monkeypatch, tmp_path):
         """If the app exits 0 against a foreign holder, that's NOT fail-loud
         — it must be flagged as a defect, not treated as success."""
-        import subprocess as sp
         port = _free_port()
         class FakeProc:
             returncode = 0
             def communicate(self, timeout=None):
                 return "started server on port\n", None
-        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        _dispatching_popen(monkeypatch, FakeProc)
         monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
         monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
 
@@ -1224,12 +1240,11 @@ class TestForeignHolderRegression:
 
     def test_foreign_holder_fails_when_message_missing_reason(self, fv, monkeypatch, tmp_path):
         port = _free_port()
-        import subprocess as sp
         class FakeProc:
             returncode = 1
             def communicate(self, timeout=None):
                 return "ERROR: something went wrong\n", None
-        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        _dispatching_popen(monkeypatch, FakeProc)
         monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
         monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
 
@@ -1246,25 +1261,54 @@ class TestForeignHolderRegression:
                 return "", None  # post-kill reap call
             def kill(self):
                 pass
-        monkeypatch.setattr(sp, "Popen", lambda *a, **kw: FakeProc())
+        _dispatching_popen(monkeypatch, FakeProc)
         monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
         monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
 
         with pytest.raises(AssertionError, match="did not exit within"):
             fv.assert_foreign_holder_not_killed("fake-exe", port, 5)
 
-    def test_foreign_holder_fixture_raises_when_port_unavailable(self, fv, monkeypatch):
-        """If the foreign-listener fixture itself can't bind the test port,
-        that's a test-setup defect, not a pass — must fail loud."""
-        occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        occupied.bind(("127.0.0.1", 0))
-        port = occupied.getsockname()[1]
-        occupied.listen(1)
+    def test_spawned_holder_is_independent_sibling_not_parent_socket(self, fv, monkeypatch, tmp_path):
+        """FAITHFULNESS regression: the foreign holder must be a genuinely
+        separate OS process (like the reclaim/double-launch fixtures spawn),
+        never a socket opened in this driver's own process — a position no
+        real-world foreign holder occupies."""
+        port = _free_port()
+        message = (
+            f"port {port} held by pid 4242, which is NOT identified as a "
+            f"ManoMatika process (healthz unreachable); refusing to kill a "
+            f"foreign process — failing loud\n"
+        )
+        class FakeProc:
+            returncode = 1
+            def communicate(self, timeout=None):
+                return message, None
+        _dispatching_popen(monkeypatch, FakeProc)
+        monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
+        monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
+
+        holder = fv._spawn_foreign_port_holder(port)
         try:
-            with pytest.raises(AssertionError, match="could not bind the foreign listener"):
-                fv.assert_foreign_holder_not_killed("fake-exe", port, 5)
+            import psutil
+            assert holder.pid != os.getpid(), (
+                "the foreign holder must be a separate process, not this test/driver process"
+            )
+            assert psutil.pid_exists(holder.pid)
+            listener_pid = None
+            for proc in psutil.process_iter(["pid"]):
+                try:
+                    conns = proc.net_connections(kind="inet")
+                except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                    continue
+                for conn in conns:
+                    if conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port:
+                        listener_pid = proc.pid
+            assert listener_pid == holder.pid, (
+                f"expected psutil to see the spawned sibling (pid {holder.pid}) as "
+                f"the LISTENer on port {port}, found pid {listener_pid!r} instead"
+            )
         finally:
-            occupied.close()
+            fv._terminate_foreign_holder(holder)
 
 
 # ---------------------------------------------------------------------------
