@@ -31,6 +31,10 @@ codes:
     severity: error
     log_route: n/a
     message: recipe.json file not found
+  - code: AHIMSA-RECIPE-001
+    severity: error
+    log_route: n/a
+    message: DELIBERATE DUP for R6 live gate proof (manomatika/ahimsa#129) - to be reverted
   - code: AHIMSA-RECIPE-002
     severity: error
     log_route: n/a
