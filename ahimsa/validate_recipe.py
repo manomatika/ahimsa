@@ -25,7 +25,9 @@ import requests
 if __package__ is None:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from ahimsa import error_code_constants as ec
 from ahimsa._config import find_config, load_allowed_hosts
+from ahimsa.manomatika_error import CODE_PATTERN, CODE_RE
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +36,31 @@ from ahimsa._config import find_config, load_allowed_hosts
 
 @dataclass
 class Error:
+    """A single validation finding.
+
+    ``code`` is the opaque ``AHIMSA-<FAC>-<NNN>`` error code (see
+    ``error-codes.yaml`` / ``ahimsa.error_code_constants``) that identifies
+    the CONDITION; ``pointer`` identifies WHERE in the recipe the condition
+    was found. ``code`` defaults to ``None`` for construction sites that have
+    not been threaded to a registered code (e.g. ``ahimsa.error_codes``'s
+    lints, which validate OTHER origins' ``error-codes.yaml`` files — a
+    separate meta-validation concern, out of scope for run R5). Every
+    ``validate_recipe`` / ``validate_releases`` construction site DOES supply
+    a code. Fail-loud (rule 18): a non-``None`` code that is not well-formed
+    ``<COMPONENT>-<FAC>-<NNN>`` raises immediately, reusing the same pattern
+    the ``ManoMatikaError`` base class enforces.
+    """
+
     pointer: str
     message: str
+    code: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.code is not None and (not isinstance(self.code, str) or not CODE_RE.match(self.code)):
+            raise ValueError(
+                f"Error.code must be a well-formed <COMPONENT>-<FAC>-<NNN> "
+                f"code or None; got {self.code!r}. Expected pattern: {CODE_PATTERN}"
+            )
 
     def __str__(self) -> str:
         return f"{self.pointer}: {self.message}"
@@ -302,9 +327,13 @@ _BUNDLE_ID_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9-]*(\.[a-zA-Z][a-zA-Z0-9-]*){2,}
 _PRODUCT_NAME_RE = re.compile(r'^[A-Za-z0-9]([A-Za-z0-9]| [A-Za-z0-9]|-[A-Za-z0-9])*$')
 
 
-def _check_version(errors: list[Error], value: str, pointer: str) -> None:
+def _check_version(errors: list[Error], value: str, pointer: str, code: str) -> None:
     if not _VERSION_RE.match(value):
-        errors.append(Error(pointer, f'"{value}" is not a valid version — must be exact X.Y.Z'))
+        errors.append(Error(
+            pointer,
+            f'"{value}" is not a valid version — must be exact X.Y.Z',
+            code=code,
+        ))
 
 
 def _check_product_name(errors: list[Error], value: str, pointer: str) -> None:
@@ -314,12 +343,17 @@ def _check_product_name(errors: list[Error], value: str, pointer: str) -> None:
             f'"{value}" is not a valid product name — must be ASCII '
             f'alphanumerics separated by single spaces or hyphens, starting '
             f'and ending with an alphanumeric (e.g. "ManoMatika")',
+            code=ec.AHIMSA_APP_002,
         ))
 
 
 def _check_bundle_id(errors: list[Error], value: str, pointer: str) -> None:
     if not _BUNDLE_ID_RE.match(value):
-        errors.append(Error(pointer, f'not a valid reverse-DNS identifier ("{value}")'))
+        errors.append(Error(
+            pointer,
+            f'not a valid reverse-DNS identifier ("{value}")',
+            code=ec.AHIMSA_APP_003,
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -353,10 +387,10 @@ def validate(
         with open(recipe_path) as f:
             recipe = json.load(f)
     except FileNotFoundError:
-        errors.append(Error("recipe", f'file not found: "{recipe_path}"'))
+        errors.append(Error("recipe", f'file not found: "{recipe_path}"', code=ec.AHIMSA_RECIPE_001))
         return errors
     except json.JSONDecodeError as e:
-        errors.append(Error("recipe", f"invalid JSON: {e}"))
+        errors.append(Error("recipe", f"invalid JSON: {e}", code=ec.AHIMSA_RECIPE_002))
         return errors
 
     # --- Schema: application ---
@@ -364,13 +398,13 @@ def validate(
 
     for field in ("name", "product_name", "version", "bundle_id", "icon"):
         if not app.get(field):
-            errors.append(Error(f"application.{field}", "required field missing"))
+            errors.append(Error(f"application.{field}", "required field missing", code=ec.AHIMSA_APP_001))
 
     if app.get("product_name"):
         _check_product_name(errors, app["product_name"], "application.product_name")
 
     if app.get("version"):
-        _check_version(errors, app["version"], "application.version")
+        _check_version(errors, app["version"], "application.version", ec.AHIMSA_APP_004)
 
     if app.get("bundle_id"):
         _check_bundle_id(errors, app["bundle_id"], "application.bundle_id")
@@ -380,15 +414,15 @@ def validate(
 
     for field in ("version", "repo", "tag"):
         if not matika.get(field):
-            errors.append(Error(f"matika.{field}", "required field missing"))
+            errors.append(Error(f"matika.{field}", "required field missing", code=ec.AHIMSA_MATIKA_001))
 
     if matika.get("version"):
-        _check_version(errors, matika["version"], "matika.version")
+        _check_version(errors, matika["version"], "matika.version", ec.AHIMSA_MATIKA_002)
 
     # --- Schema: applugs ---
     applugs_raw = recipe.get("applugs")
     if not isinstance(applugs_raw, list) or len(applugs_raw) == 0:
-        errors.append(Error("applugs", "required field missing or empty array"))
+        errors.append(Error("applugs", "required field missing or empty array", code=ec.AHIMSA_RECIPE_003))
         return errors
 
     recipe_mv = matika.get("version", "")
@@ -401,14 +435,14 @@ def validate(
 
         for field in ("name", "repo", "version", "matika_version", "tag"):
             if not plug.get(field):
-                errors.append(Error(f"{ptr}.{field}", "required field missing"))
+                errors.append(Error(f"{ptr}.{field}", "required field missing", code=ec.AHIMSA_PLUG_001))
                 all_present = False
 
         if plug.get("version"):
-            _check_version(errors, plug["version"], f"{ptr}.version")
+            _check_version(errors, plug["version"], f"{ptr}.version", ec.AHIMSA_PLUG_003)
 
         if plug.get("matika_version"):
-            _check_version(errors, plug["matika_version"], f"{ptr}.matika_version")
+            _check_version(errors, plug["matika_version"], f"{ptr}.matika_version", ec.AHIMSA_PLUG_003)
 
         if all_present:
             structurally_valid.append((i, plug))
@@ -423,6 +457,7 @@ def validate(
         errors.append(Error(
             "applugs",
             f"applugs declare conflicting matika_version values: {sorted(declared_mvs)}",
+            code=ec.AHIMSA_RECIPE_004,
         ))
 
     # --- Recipe-matika consistency ---
@@ -432,6 +467,7 @@ def validate(
             errors.append(Error(
                 f"applugs[{i}].matika_version",
                 f'"{mv}" does not match recipe matika.version "{recipe_mv}"',
+                code=ec.AHIMSA_PLUG_002,
             ))
 
     # --- Remote verification ---
@@ -446,45 +482,48 @@ def validate(
             host = repo.split("/", 1)[0]
             res = resolvers.get(host)
             if res is None:
-                errors.append(Error(f"{ptr}.repo", f'no resolver for host "{host}"'))
+                errors.append(Error(f"{ptr}.repo", f'no resolver for host "{host}"', code=ec.AHIMSA_RESOLVE_001))
                 continue
         else:
             try:
                 res = resolver_for(repo, allowed_hosts=allowed_hosts)
             except (PermissionError, LookupError) as e:
-                errors.append(Error(f"{ptr}.repo", str(e)))
+                errors.append(Error(f"{ptr}.repo", str(e), code=ec.AHIMSA_RESOLVE_002))
                 continue
 
         # Fetch and verify manifest
         try:
             manifest = res.resolve(name, repo, tag)
         except ValueError as e:
-            errors.append(Error(f"{ptr}.repo", str(e)))
+            errors.append(Error(f"{ptr}.repo", str(e), code=ec.AHIMSA_RESOLVE_003))
             continue
         except (LookupError, PermissionError) as e:
-            errors.append(Error(f"{ptr}.repo", str(e)))
+            errors.append(Error(f"{ptr}.repo", str(e), code=ec.AHIMSA_RESOLVE_004))
             continue
         except FileNotFoundError as e:
-            errors.append(Error(f"{ptr}.resolve", str(e)))
+            errors.append(Error(f"{ptr}.resolve", str(e), code=ec.AHIMSA_RESOLVE_005))
             continue
         except Exception as e:
-            errors.append(Error(f"{ptr}.resolve", str(e)))
+            errors.append(Error(f"{ptr}.resolve", str(e), code=ec.AHIMSA_RESOLVE_006))
             continue
 
         if manifest.id != name:
             errors.append(Error(
                 f"{ptr}.resolve",
                 f'applug.json id "{manifest.id}" does not match recipe name "{name}"',
+                code=ec.AHIMSA_RESOLVE_007,
             ))
         if manifest.version != plug["version"]:
             errors.append(Error(
                 f"{ptr}.resolve",
                 f'applug.json version "{manifest.version}" does not match recipe version "{plug["version"]}"',
+                code=ec.AHIMSA_RESOLVE_008,
             ))
         if manifest.matika_version != plug["matika_version"]:
             errors.append(Error(
                 f"{ptr}.resolve",
                 f'applug.json matika_version "{manifest.matika_version}" does not match recipe matika_version "{plug["matika_version"]}"',
+                code=ec.AHIMSA_RESOLVE_009,
             ))
 
     # --- Release-log audits (transitive validate_releases) ---
@@ -514,13 +553,13 @@ def validate(
         for e in _validate_releases(
             [matika["repo"]], resolvers=resolvers, allowed_hosts=_releases_allowed,
         ):
-            errors.append(Error(f"matika.{e.pointer}", e.message))
+            errors.append(Error(f"matika.{e.pointer}", e.message, code=e.code))
 
     for i, plug in structurally_valid:
         for e in _validate_releases(
             [plug["repo"]], resolvers=resolvers, allowed_hosts=_releases_allowed,
         ):
-            errors.append(Error(f"applugs[{i}].{e.pointer}", e.message))
+            errors.append(Error(f"applugs[{i}].{e.pointer}", e.message, code=e.code))
 
     return errors
 
@@ -549,10 +588,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         errors = validate(args.recipe, config_path=args.config)
     except FileNotFoundError as e:
-        print(f"error: {e}", file=sys.stderr)
+        print(f"error: [{ec.AHIMSA_CLI_001}] {e}", file=sys.stderr)
         return 2
     except ValueError as e:
-        print(f"error: {e}", file=sys.stderr)
+        print(f"error: [{ec.AHIMSA_CLI_002}] {e}", file=sys.stderr)
         return 2
 
     for err in errors:

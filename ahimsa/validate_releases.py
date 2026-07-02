@@ -42,6 +42,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from ahimsa import error_code_constants as ec
 from ahimsa._config import load_allowed_hosts
 from ahimsa.releases_grammar import HEADING_RE, TAG_RE, slug_from_repo
 from ahimsa.validate_recipe import BaseResolver, Error, resolver_for
@@ -117,14 +118,14 @@ def validate_releases(
     if resolvers is not None:
         ahimsa_res = resolvers.get(ahimsa_host)
         if ahimsa_res is None:
-            errors.append(Error("releases.repo", f'no resolver for host "{ahimsa_host}"'))
+            errors.append(Error("releases.repo", f'no resolver for host "{ahimsa_host}"', code=ec.AHIMSA_RELEASE_001))
             return errors
     else:
         # RELEASES.md always lives on github.com — bypass recipe's allowed_hosts for this fetch
         try:
             ahimsa_res = resolver_for(ahimsa_repo, allowed_hosts=["github.com"])
         except (PermissionError, LookupError) as e:
-            errors.append(Error("releases.repo", str(e)))
+            errors.append(Error("releases.repo", str(e), code=ec.AHIMSA_RELEASE_002))
             return errors
         # Per-repo tag checks use the passed allowed_hosts (default to github.com if not specified)
         if allowed_hosts is None:
@@ -140,7 +141,7 @@ def validate_releases(
     try:
         text = ahimsa_res.fetch_text(ahimsa_repo, _mm_ref, "RELEASES.md")
     except Exception as e:
-        errors.append(Error("releases.fetch", f"could not fetch RELEASES.md: {e}"))
+        errors.append(Error("releases.fetch", f"could not fetch RELEASES.md: {e}", code=ec.AHIMSA_RELEASE_003))
         return errors
 
     if text is None:
@@ -191,13 +192,13 @@ def validate_releases(
         if resolvers is not None:
             res = resolvers.get(repo_host)
             if res is None:
-                errors.append(Error("releases.repo", f'no resolver for host "{repo_host}"'))
+                errors.append(Error("releases.repo", f'no resolver for host "{repo_host}"', code=ec.AHIMSA_RELEASE_001))
                 continue
         else:
             try:
                 res = resolver_for(repo_spec, allowed_hosts=allowed_hosts)
             except (PermissionError, LookupError) as e:
-                errors.append(Error("releases.repo", str(e)))
+                errors.append(Error("releases.repo", str(e), code=ec.AHIMSA_RELEASE_002))
                 continue
 
         # Entries for this slug
@@ -206,7 +207,7 @@ def validate_releases(
         # --- Duplicate detection (per slug) ---
         tag_counts = Counter(t for _, t in slug_entries)
         for tag in sorted(t for t, n in tag_counts.items() if n > 1):
-            errors.append(Error(f'releases.entry["{tag}"]', "duplicate entry"))
+            errors.append(Error(f'releases.entry["{tag}"]', "duplicate entry", code=ec.AHIMSA_RELEASE_004))
 
         entry_set = {t for _, t in slug_entries}
 
@@ -214,7 +215,7 @@ def validate_releases(
         try:
             all_tags = res.list_tags(repo_spec)
         except Exception as e:
-            errors.append(Error("releases.tags", f"could not list tags: {e}"))
+            errors.append(Error("releases.tags", f"could not list tags: {e}", code=ec.AHIMSA_RELEASE_005))
             continue
 
         # Filter to in-scope tags only — non-conforming names are ignored.
@@ -245,6 +246,7 @@ def validate_releases(
             errors.append(Error(
                 f'releases.tag["{tag}"]',
                 "tag exists but no entry in RELEASES.md",
+                code=ec.AHIMSA_RELEASE_006,
             ))
 
         # Category B (entry but no tag) — exempt deleted_tag breadcrumbs AND
@@ -255,6 +257,7 @@ def validate_releases(
             errors.append(Error(
                 f'releases.entry["{tag}"]',
                 "entry in RELEASES.md but tag does not exist",
+                code=ec.AHIMSA_RELEASE_007,
             ))
 
     return errors
@@ -295,10 +298,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         allowed_hosts = load_allowed_hosts(args.config)
     except FileNotFoundError as e:
-        print(f"error: {e}", file=sys.stderr)
+        print(f"error: [{ec.AHIMSA_CLI_001}] {e}", file=sys.stderr)
         return 2
     except ValueError as e:
-        print(f"error: {e}", file=sys.stderr)
+        print(f"error: [{ec.AHIMSA_CLI_002}] {e}", file=sys.stderr)
         return 2
 
     repos = list(args.repos)
