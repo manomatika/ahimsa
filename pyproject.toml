@@ -29,6 +29,9 @@ pattern = "(?P<version>[^\n]+)"
 [project.scripts]
 ahimsa-validate = "ahimsa.validate_recipe:main"
 ahimsa-validate-releases = "ahimsa.validate_releases:main"
+# Report-only at R0 (never fails the gate); flips to blocking in R6
+# (manomatika/ahimsa#129).
+ahimsa-aggregate-error-codes = "ahimsa.error_codes:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ahimsa"]
