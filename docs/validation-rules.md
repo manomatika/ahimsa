@@ -2,7 +2,7 @@
 
 ## Validation Rules
 
-`validate_recipe.py` enforces all rules in a single pass, accumulating errors rather than failing fast. Every error carries a JSON pointer and a clear message. Exit codes: 0 (clean), 1 (validation failure), 2 (configuration error — bad `--config` path or malformed config JSON).
+`validate_recipe.py` enforces all rules in a single pass, accumulating errors rather than failing fast. Every error carries a JSON pointer, a clear message, and — as of run R5 (manomatika/ahimsa#128) — an opaque `AHIMSA-<FAC>-<NNN>` code (`Error.code`) drawn from the repo-root [`error-codes.yaml`](../error-codes.yaml) registry (ahimsa's own 31 codes, `supported_locales: [en]` only — ahimsa is the English-only carve-out). `validate_releases.py`'s findings carry the same codes and are threaded through unchanged when `validate()` wraps them under the `matika.*` / `applugs[i].*` pointers. `--config` failures on both console scripts (`ahimsa-validate`, `ahimsa-validate-releases`) print the `AHIMSA-CLI-001`/`AHIMSA-CLI-002` codes alongside the message. Exit codes: 0 (clean), 1 (validation failure), 2 (configuration error — bad `--config` path or malformed config JSON).
 
 **Schema validation**
 - Required fields: `application.{name, product_name, version, bundle_id, icon}`, `matika.{version, repo, tag}`, `applugs` (non-empty array), per-applug `{name, repo, version, matika_version, tag}`

@@ -1,0 +1,162 @@
+# ahimsa's own error-codes.yaml (run R5, manomatika/ahimsa#128).
+#
+# ahimsa is a non-emitter: a CI/build-time validator, not a long-running
+# service with matika's startup/aggregate logging sinks. Every code below
+# therefore carries log_route: n/a — findings surface as CI ``::error::``
+# annotations / stderr text and the process exit code, never a matika log
+# record. ahimsa is also the English-only carve-out (with the launcher and
+# ahimsa's own logs): supported_locales is [en] ONLY, no es catalog.
+#
+# Facilities (7), each contiguous from 001, 31 codes total:
+#   RECIPE  (4) — recipe.json top-level structural checks
+#   APP     (4) — recipe.json "application" object checks
+#   MATIKA  (2) — recipe.json "matika" object checks
+#   PLUG    (3) — recipe.json "applugs[]" object checks
+#   RESOLVE (9) — remote applug.json resolution + cross-check against the recipe
+#   RELEASE (7) — RELEASES.md / release-log.yaml audit (validate_releases.py)
+#   CLI     (2) — ahimsa-validate / ahimsa-validate-releases --config failures
+#
+# See ahimsa/validate_recipe.py (class Error, function validate()),
+# ahimsa/validate_releases.py (function validate_releases()), and the CLI
+# --config handling in both modules' main() for the emit sites.
+origin: ahimsa
+component: AHIMSA
+supported_locales: [en]
+codes:
+  # --- RECIPE: recipe.json top-level structural checks -----------------
+  - code: AHIMSA-RECIPE-001
+    severity: error
+    log_route: n/a
+    message: recipe.json file not found
+  - code: AHIMSA-RECIPE-002
+    severity: error
+    log_route: n/a
+    message: recipe.json is not valid JSON
+  - code: AHIMSA-RECIPE-003
+    severity: error
+    log_route: n/a
+    message: applugs field is missing or an empty array
+  - code: AHIMSA-RECIPE-004
+    severity: error
+    log_route: n/a
+    message: applugs declare conflicting matika_version values
+
+  # --- APP: recipe.json "application" object checks ---------------------
+  - code: AHIMSA-APP-001
+    severity: error
+    log_route: n/a
+    message: application required field missing
+  - code: AHIMSA-APP-002
+    severity: error
+    log_route: n/a
+    message: application.product_name is not a valid product name
+  - code: AHIMSA-APP-003
+    severity: error
+    log_route: n/a
+    message: application.bundle_id is not a valid reverse-DNS identifier
+  - code: AHIMSA-APP-004
+    severity: error
+    log_route: n/a
+    message: application.version is not a valid X.Y.Z version
+
+  # --- MATIKA: recipe.json "matika" object checks ------------------------
+  - code: AHIMSA-MATIKA-001
+    severity: error
+    log_route: n/a
+    message: matika required field missing
+  - code: AHIMSA-MATIKA-002
+    severity: error
+    log_route: n/a
+    message: matika.version is not a valid X.Y.Z version
+
+  # --- PLUG: recipe.json "applugs[]" object checks -----------------------
+  - code: AHIMSA-PLUG-001
+    severity: error
+    log_route: n/a
+    message: applug required field missing
+  - code: AHIMSA-PLUG-002
+    severity: error
+    log_route: n/a
+    message: applug matika_version does not match recipe matika.version
+  - code: AHIMSA-PLUG-003
+    severity: error
+    log_route: n/a
+    message: applug version field is not a valid X.Y.Z version
+
+  # --- RESOLVE: remote applug.json resolution + cross-check --------------
+  - code: AHIMSA-RESOLVE-001
+    severity: error
+    log_route: n/a
+    message: no resolver registered for applug repo host
+  - code: AHIMSA-RESOLVE-002
+    severity: error
+    log_route: n/a
+    message: applug repo host resolver selection denied or unavailable
+  - code: AHIMSA-RESOLVE-003
+    severity: error
+    log_route: n/a
+    message: applug manifest resolution returned malformed data
+  - code: AHIMSA-RESOLVE-004
+    severity: error
+    log_route: n/a
+    message: applug manifest resolution denied or unsupported
+  - code: AHIMSA-RESOLVE-005
+    severity: error
+    log_route: n/a
+    message: applug.json not found at the pinned tag
+  - code: AHIMSA-RESOLVE-006
+    severity: error
+    log_route: n/a
+    message: unexpected applug manifest resolution failure
+  - code: AHIMSA-RESOLVE-007
+    severity: error
+    log_route: n/a
+    message: resolved applug id does not match the recipe name
+  - code: AHIMSA-RESOLVE-008
+    severity: error
+    log_route: n/a
+    message: resolved applug version does not match the recipe version
+  - code: AHIMSA-RESOLVE-009
+    severity: error
+    log_route: n/a
+    message: resolved applug matika_version does not match the recipe matika_version
+
+  # --- RELEASE: RELEASES.md / release-log.yaml audit ---------------------
+  - code: AHIMSA-RELEASE-001
+    severity: error
+    log_route: n/a
+    message: no resolver registered for release-audit host
+  - code: AHIMSA-RELEASE-002
+    severity: error
+    log_route: n/a
+    message: release-audit host resolver selection denied or unavailable
+  - code: AHIMSA-RELEASE-003
+    severity: error
+    log_route: n/a
+    message: could not fetch RELEASES.md
+  - code: AHIMSA-RELEASE-004
+    severity: error
+    log_route: n/a
+    message: duplicate RELEASES.md entry for tag
+  - code: AHIMSA-RELEASE-005
+    severity: error
+    log_route: n/a
+    message: could not list git tags for repo
+  - code: AHIMSA-RELEASE-006
+    severity: error
+    log_route: n/a
+    message: tag exists but has no RELEASES.md entry
+  - code: AHIMSA-RELEASE-007
+    severity: error
+    log_route: n/a
+    message: RELEASES.md entry exists but the tag does not
+
+  # --- CLI: ahimsa-validate / ahimsa-validate-releases --config failures -
+  - code: AHIMSA-CLI-001
+    severity: fatal
+    log_route: n/a
+    message: "--config path not found"
+  - code: AHIMSA-CLI-002
+    severity: fatal
+    log_route: n/a
+    message: "--config file is not valid JSON"
