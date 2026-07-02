@@ -28,7 +28,11 @@ REPO_ROOT = Path(__file__).parent.parent
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 # The console scripts the package documents and ships.
-EXPECTED_SCRIPTS = {"ahimsa-validate", "ahimsa-validate-releases"}
+EXPECTED_SCRIPTS = {
+    "ahimsa-validate",
+    "ahimsa-validate-releases",
+    "ahimsa-aggregate-error-codes",
+}
 
 
 def _declared_scripts() -> dict[str, str]:

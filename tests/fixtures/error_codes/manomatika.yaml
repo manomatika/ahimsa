@@ -1,0 +1,6 @@
+# The reserved, forward-looking manomatika namespace: a well-formed EMPTY file.
+# manomatika declares zero concrete codes at v0.0.1 (see plan §2.1).
+origin: manomatika
+component: MANOMATIKA
+supported_locales: [en]
+codes: []

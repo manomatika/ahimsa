@@ -1,0 +1,15 @@
+# Minimal VALID example used to exercise the codegen. These are illustrative
+# fixture codes under the ahimsa namespace — NOT ahimsa's real 31 codes (those
+# are authored in run R5, manomatika/ahimsa#128). Kept intentionally tiny.
+origin: ahimsa
+component: AHIMSA
+supported_locales: [en]
+codes:
+  - code: AHIMSA-CFG-001
+    severity: error
+    log_route: n/a
+    message: Example configuration error.
+  - code: AHIMSA-CFG-002
+    severity: warning
+    log_route: n/a
+    message: Example configuration warning.
