@@ -1,12 +1,14 @@
 """
-Tests for the R0 error-code mechanism: ManoMatikaError base class, the schema
-lints, the report-only aggregator, and the codegen.
+Tests for the error-code mechanism: ManoMatikaError base class, the schema
+lints, the BLOCKING cross-repo aggregator + registry-parity check, and the codegen.
 
 Every lint rule has a regression test that FAILS without the rule (a malformed
 input must produce the expected Error) and a companion asserting a well-formed
 input lints clean. The reserved MATIKA-LNCH-001/002/003 codes and the empty
-MANOMATIKA namespace are asserted valid; the aggregator's report-only contract
-is proven (a registry that WOULD fail blocking validation still exits 0).
+MANOMATIKA namespace are asserted valid; the aggregator's BLOCKING contract
+(R6, manomatika/ahimsa#129) is proven — a registry with findings exits 1 (X),
+a clean merged registry exits 0 (V) — along with the --require-all-origins
+missing-origin parity check.
 """
 
 import subprocess
@@ -362,7 +364,7 @@ def test_load_error_codes_missing_file(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Aggregator — cross-file rules + REPORT-ONLY contract
+# Aggregator — cross-file rules + BLOCKING (V/X) + registry-parity contract
 # ---------------------------------------------------------------------------
 
 
@@ -411,8 +413,13 @@ def test_aggregate_missing_file_is_reported(tmp_path):
     assert any("file not found" in f for f in findings)
 
 
-def test_aggregate_is_report_only_exit_zero(tmp_path, capsys):
-    """A registry that WOULD fail blocking validation must STILL exit 0 at R0."""
+def test_aggregate_is_blocking_exit_one_on_findings(tmp_path, capsys):
+    """R6 flip (manomatika/ahimsa#129): a registry with findings exits 1 (X).
+
+    This is the rule-22 regression for the report-only -> blocking flip: on the
+    PRE-flip code main() ALWAYS returned 0, so this assertion (rc == 1) would
+    fail; with the flip it passes. Findings are enumerated before failing.
+    """
     bad = _write(tmp_path, "bad.yaml", _valid_matika("""\
         - code: MATIKA-LNCH-002
           severity: catastrophic
@@ -421,17 +428,128 @@ def test_aggregate_is_report_only_exit_zero(tmp_path, capsys):
     """))
     # The pure function reports findings...
     assert aggregate_error_codes([bad]) != []
-    # ...but the CLI is REPORT-ONLY: exit code 0 regardless.
+    # ...and the CLI is now BLOCKING: exit code 1 when any finding is present.
     rc = main([str(bad)])
-    assert rc == 0
+    assert rc == 1
     captured = capsys.readouterr()
-    assert "REPORT-ONLY" in captured.err
+    assert "BLOCKING" in captured.err
+    # Fail-loud: the specific findings are printed before the non-zero exit.
+    assert "catastrophic" in captured.err
 
 
 def test_aggregate_clean_cli_exit_zero(tmp_path, capsys):
     good = _write(tmp_path, "manomatika.yaml", (FIXTURES / "manomatika.yaml").read_text())
     assert main([str(good)]) == 0
     assert "clean" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Registry-parity — --require-all-origins missing-origin check (R6)
+# ---------------------------------------------------------------------------
+
+
+def _four_clean_sources(tmp_path):
+    """Write the four expected per-origin files, cleanly disjoint, and return paths."""
+    matika = _write(tmp_path, "matika.yaml", _valid_matika("""\
+        - code: MATIKA-LNCH-001
+          severity: error
+          log_route: startup
+          message: a
+    """))
+    eyerate = _write(tmp_path, "eyerate.yaml", textwrap.dedent("""\
+        origin: eyerate
+        component: EYERATE
+        supported_locales: [en, es]
+        codes:
+          - code: EYERATE-PROV-001
+            severity: error
+            log_route: aggregate
+            message: b
+    """))
+    ahimsa = _write(tmp_path, "ahimsa.yaml", textwrap.dedent("""\
+        origin: ahimsa
+        component: AHIMSA
+        supported_locales: [en]
+        codes:
+          - code: AHIMSA-CFG-001
+            severity: error
+            log_route: startup
+            message: c
+    """))
+    manomatika = _write(tmp_path, "manomatika.yaml", (FIXTURES / "manomatika.yaml").read_text())
+    return [matika, eyerate, ahimsa, manomatika]
+
+
+def test_parity_clean_four_origins_passes(tmp_path, capsys):
+    """All four expected origins present + disjoint -> clean under --require-all-origins."""
+    paths = _four_clean_sources(tmp_path)
+    assert aggregate_error_codes(paths, require_all_origins=True) == []
+    assert main(["--require-all-origins", *[str(p) for p in paths]]) == 0
+    assert "clean" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("dropped", ["matika", "eyerate", "ahimsa", "manomatika"])
+def test_parity_missing_origin_is_flagged(tmp_path, dropped):
+    """Dropping any expected origin's file yields a missing-origin finding, but
+    ONLY when --require-all-origins is set (the default aggregation stays lenient
+    so ad-hoc single-file diagnostics don't spuriously fail)."""
+    paths = [p for p in _four_clean_sources(tmp_path) if p.stem != dropped]
+
+    # Without the flag: the remaining files are individually clean -> no finding.
+    assert aggregate_error_codes(paths) == []
+
+    # With the flag: the dropped origin is reported as missing-origin.
+    findings = [str(e) for e in aggregate_error_codes(paths, require_all_origins=True)]
+    assert any(
+        f'registry.origin["{dropped}"]' in f and "missing-origin" in f
+        for f in findings
+    ), findings
+
+
+def test_parity_dup_plus_missing_origin_blocks(tmp_path, capsys):
+    """rule-22 regression for the R6 registry-parity coverage: a merged registry
+    with BOTH a cross-origin duplicate code AND a missing origin must fail the
+    blocking CLI (exit 1), enumerating EACH finding with its Error pointer.
+
+    On the PRE-R6 code this fails twice over: main() always returned 0 AND
+    aggregate_error_codes had no missing-origin coverage (no require_all_origins
+    parameter), so neither assertion below could hold. With the R6 change both
+    pass."""
+    # matika + eyerate collide on the SAME code string (cross-origin dup / drift:
+    # a code not backed by exactly one declaring origin). manomatika + ahimsa are
+    # absent from the inputs entirely (missing-origin x2).
+    matika = _write(tmp_path, "matika.yaml", _valid_matika("""\
+        - code: MATIKA-LNCH-001
+          severity: error
+          log_route: startup
+          message: a
+    """))
+    eyerate = _write(tmp_path, "eyerate.yaml", textwrap.dedent("""\
+        origin: eyerate
+        component: EYERATE
+        supported_locales: [en]
+        codes:
+          - code: MATIKA-LNCH-001
+            severity: error
+            log_route: startup
+            message: b
+    """))
+
+    findings = [str(e) for e in aggregate_error_codes([matika, eyerate], require_all_origins=True)]
+    # cross-origin duplicate code (drift)
+    assert any('registry.code["MATIKA-LNCH-001"]' in f and "declared by both" in f for f in findings), findings
+    # both absent expected origins reported as missing-origin
+    assert any('registry.origin["manomatika"]' in f and "missing-origin" in f for f in findings), findings
+    assert any('registry.origin["ahimsa"]' in f and "missing-origin" in f for f in findings), findings
+
+    # The blocking CLI fails (X) and prints every finding first.
+    rc = main(["--require-all-origins", str(matika), str(eyerate)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "BLOCKING" in err
+    assert 'registry.code["MATIKA-LNCH-001"]' in err
+    assert 'registry.origin["manomatika"]' in err
+    assert 'registry.origin["ahimsa"]' in err
 
 
 # ---------------------------------------------------------------------------

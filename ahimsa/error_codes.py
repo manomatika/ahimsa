@@ -13,10 +13,13 @@ provides:
     conformance, and per-file code uniqueness (numbers are opaque and
     MONOTONIC — reserved/retired/skipped values are allowed, so gaps are NOT
     a defect; only a duplicate is);
-  - the report-only AGGREGATOR that merges every origin's file and validates the
-    merged registry (cross-file uniqueness, component-prefix disjointness). At
-    this phase (R0) the aggregator is REPORT-ONLY: it prints findings but NEVER
-    fails the gate. The flip to blocking is run R6 (manomatika/ahimsa#129);
+  - the BLOCKING AGGREGATOR that merges every origin's file and validates the
+    merged per-build registry (cross-file uniqueness, component-prefix
+    disjointness, and — under ``require_all_origins`` — registry parity: every
+    expected origin present). It enumerates ALL findings, then :func:`main`
+    exits 1 if any exist and 0 when the merged registry is clean (V/X). The
+    aggregator was report-only at R0; it was flipped to blocking in R6
+    (manomatika/ahimsa#129);
   - the CODEGEN that renders a file into a module of typed constants, giving
     compile-time "can't emit an unregistered code" safety.
 
@@ -38,8 +41,8 @@ carrier) — they are not separate fields. The empty ``manomatika`` namespace
 Fail-loud discipline (rule 18): ``parse_error_codes_text`` raises only when the
 input is structurally unparseable; every schema/value violation is surfaced as a
 concrete ``Error`` (pointer + message carrying the offending value) so the
-report-only aggregator can enumerate ALL findings across ALL files without
-crashing on the first bad one.
+blocking aggregator can enumerate ALL findings across ALL files before failing —
+most-data-available, never crashing on the first bad one.
 """
 
 from __future__ import annotations
@@ -116,7 +119,7 @@ class RawErrorCodesFile:
 
     Structural parsing only: the top level is a mapping and ``codes`` is a list
     of mappings. Missing/blank values are tolerated here and surfaced by the
-    lints as :class:`Error`, so the report-only aggregator can enumerate every
+    lints as :class:`Error`, so the blocking aggregator can enumerate every
     violation instead of crashing on the first one.
     """
 
@@ -139,7 +142,7 @@ def parse_error_codes_text(text: str, *, path: str = "<error-codes.yaml>") -> Ra
     *path* and the offending shape — ONLY when the input is structurally
     unparseable (invalid YAML, non-mapping top level, or a ``codes`` value that
     is not a list). Every other issue is left for the lints so that a single bad
-    file cannot abort a whole-registry report-only aggregation.
+    file cannot abort a whole-registry aggregation.
     """
     try:
         import yaml
@@ -350,26 +353,42 @@ def load_error_codes(path: str | Path) -> ErrorCodesFile:
 
 
 # ---------------------------------------------------------------------------
-# Aggregator (report-only at R0 — NEVER blocks the gate)
+# Aggregator (BLOCKING — :func:`main` exits 1 on any finding: V/X)
 # ---------------------------------------------------------------------------
 
 
-def aggregate_error_codes(paths: list[str | Path]) -> list[Error]:
+def aggregate_error_codes(
+    paths: list[str | Path], *, require_all_origins: bool = False
+) -> list[Error]:
     """Aggregate every origin's ``error-codes.yaml`` and validate the MERGED registry.
 
     For each file: parse (leniently) and run the per-file lints. Then validate
-    the union: no code string appears in more than one origin, and no two
-    origins declare the same component (prefix-disjointness). Returns ALL
-    findings — per-file AND cross-file — as a flat list.
+    the union (registry parity — the merged per-build registry must agree with
+    the per-origin DECLARED registries):
 
-    This function is pure: it computes findings but takes no action on them. The
-    REPORT-ONLY policy (never fail the gate) lives in :func:`main`; the flip to
-    blocking is run R6 (manomatika/ahimsa#129).
+      - **dup** — no code string appears in more than one origin, and no two
+        origins declare the same component (prefix-disjointness). A duplicate is
+        drift: a code/component in the merged registry not backed by *exactly
+        one* declaring origin.
+      - **missing-origin** (only when *require_all_origins* is True) — every
+        expected origin in :data:`COMPONENT_FOR_ORIGIN`
+        (matika / eyerate / ahimsa / manomatika) must contribute a declaring
+        file to the inputs. The product gate feeds all four SHA-pinned sources
+        and sets this flag, so an origin whose ``error-codes.yaml`` is absent
+        from the merged registry inputs fails the gate.
+
+    Returns ALL findings — per-file lint, cross-file dup, and (when required)
+    missing-origin — as a flat list. This function is pure: it computes findings
+    but takes no action on them. The BLOCKING policy (exit 1 on any finding)
+    lives in :func:`main`; the aggregator was flipped from report-only to
+    blocking in R6 (manomatika/ahimsa#129).
     """
     errors: list[Error] = []
     # code -> origin that first declared it; component -> origin likewise.
     code_owner: dict[str, str] = {}
     component_owner: dict[str, str] = {}
+    # Expected origins that actually contributed a declaring file (parity input).
+    present_origins: set[str] = set()
 
     for path in paths:
         p = Path(path)
@@ -385,6 +404,8 @@ def aggregate_error_codes(paths: list[str | Path]) -> list[Error]:
         errors.extend(lint_error_codes(raw))
 
         origin = raw.origin if isinstance(raw.origin, str) and raw.origin else str(p)
+        if isinstance(raw.origin, str) and raw.origin in COMPONENT_FOR_ORIGIN:
+            present_origins.add(raw.origin)
 
         # Cross-file component disjointness.
         if isinstance(raw.component, str) and raw.component:
@@ -412,6 +433,19 @@ def aggregate_error_codes(paths: list[str | Path]) -> list[Error]:
                 ))
             else:
                 code_owner[code] = origin
+
+    # Registry-parity: every expected origin must be present in the merged
+    # inputs. Enumerated LAST (after every per-file/cross-file finding) so the
+    # blocking gate reports the most data available (rule 18) before failing.
+    if require_all_origins:
+        for expected_origin, expected_component in COMPONENT_FOR_ORIGIN.items():
+            if expected_origin not in present_origins:
+                errors.append(Error(
+                    f'error-codes.registry.origin["{expected_origin}"]',
+                    f"expected origin {expected_origin!r} (component "
+                    f"{expected_component!r}) is absent from the merged registry "
+                    f"inputs (missing-origin)",
+                ))
 
     return errors
 
@@ -464,26 +498,34 @@ def render_constants_module(ecf: ErrorCodesFile) -> str:
 
 
 # ---------------------------------------------------------------------------
-# CLI — report-only aggregator
+# CLI — BLOCKING aggregator (V/X)
 # ---------------------------------------------------------------------------
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Report-only aggregator CLI.
+    """Blocking aggregator CLI (V/X).
 
-    Aggregates the ``error-codes.yaml`` files given on the command line, prints
-    every finding, and ALWAYS exits 0. This is deliberate at R0: the aggregator
-    reports but does not block the gate. The flip to blocking (exit 1 on
-    findings) is run R6 (manomatika/ahimsa#129).
+    Aggregates the ``error-codes.yaml`` files given on the command line and
+    registry-parity-checks the merged registry, printing every finding first
+    (fail-loud, most-data-available — rule 18) and then returning the verdict:
+    exit 1 (X) if :func:`aggregate_error_codes` returns any finding, exit 0 (V)
+    when the merged registry is clean. This is the R6 blocking behaviour
+    (manomatika/ahimsa#129); the aggregator was report-only at R0.
+
+    ``--require-all-origins`` additionally fails if any expected origin
+    (matika / eyerate / ahimsa / manomatika) is absent from the inputs
+    (missing-origin). The product gate passes this flag because it always feeds
+    all four SHA-pinned per-origin sources.
     """
     import argparse
 
     parser = argparse.ArgumentParser(
         prog="ahimsa-aggregate-error-codes",
         description=(
-            "Aggregate and validate every origin's error-codes.yaml. "
-            "REPORT-ONLY: prints findings but never fails (exits 0). "
-            "The flip to blocking is manomatika/ahimsa#129 (R6)."
+            "Aggregate, validate, and registry-parity-check every origin's "
+            "error-codes.yaml. BLOCKING (V/X): prints all findings then exits 1 "
+            "if any exist, 0 when the merged registry is clean "
+            "(manomatika/ahimsa#129)."
         ),
     )
     parser.add_argument(
@@ -492,22 +534,33 @@ def main(argv: list[str] | None = None) -> int:
         metavar="ERROR_CODES_YAML",
         help="paths to per-origin error-codes.yaml files",
     )
+    parser.add_argument(
+        "--require-all-origins",
+        action="store_true",
+        help=(
+            "fail if any expected origin (matika/eyerate/ahimsa/manomatika) is "
+            "absent from the inputs (missing-origin parity check). The product "
+            "gate sets this because it feeds all four pinned sources."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    errors = aggregate_error_codes(list(args.files))
+    errors = aggregate_error_codes(
+        list(args.files), require_all_origins=args.require_all_origins
+    )
 
     if errors:
         print(
-            f"error-codes aggregation found {len(errors)} issue(s) "
-            "[REPORT-ONLY — not blocking at this phase; see manomatika/ahimsa#129]:",
+            f"error-codes aggregation FAILED with {len(errors)} finding(s) "
+            "[BLOCKING — manomatika/ahimsa#129]:",
             file=sys.stderr,
         )
         for err in errors:
             print(f"  {err}", file=sys.stderr)
-    else:
-        print("error-codes aggregation: merged registry is clean.", file=sys.stderr)
+        # BLOCKING: any finding fails the gate (X).
+        return 1
 
-    # REPORT-ONLY: never fail the gate at R0.
+    print("error-codes aggregation: merged registry is clean.", file=sys.stderr)
     return 0
 
 

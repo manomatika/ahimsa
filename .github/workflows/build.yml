@@ -63,6 +63,29 @@ jobs:
           MANOMATIKA_REF: ${{ inputs.manomatika_ref }}
         run: uv run ahimsa-validate "$RECIPE_PATH"
 
+      - name: Aggregate + registry-parity-check cross-repo error codes (BLOCKING)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # PLATFORM-INDEPENDENT PRODUCT-GATE CHECK (manomatika/ahimsa#129, R6):
+          # construct the MERGED per-build error-code registry by aggregating the
+          # four SHA-pinned per-origin error-codes.yaml the recipe names — matika
+          # (recipe.matika.tag), each applug (its tag), manomatika (its reserved
+          # namespace), and this ahimsa checkout's local registry — then run the
+          # now-BLOCKING aggregator with --require-all-origins. A parity violation
+          # (dup / drift / missing-origin) makes THIS validate job fail (X), which
+          # blocks every downstream platform build. ahimsa is the SOLE owner of
+          # errors.* parity. The manomatika-ref for the manomatika namespace matches
+          # the recipe fetch above (default branch unless a cross-repo validation
+          # pins one).
+          FILES="$(python3 scripts/fetch_error_codes_sources.py \
+            --recipe "$RECIPE_PATH" \
+            --out build/error-codes-sources \
+            --manomatika-ref "${{ inputs.manomatika_ref }}")"
+          echo "Aggregating merged registry from:"
+          echo "$FILES"
+          uv run ahimsa-aggregate-error-codes --require-all-origins $FILES
+
   # ---------------------------------------------------------------------------
   # BUILD — macOS Apple Silicon (macos-14)
   # ---------------------------------------------------------------------------
