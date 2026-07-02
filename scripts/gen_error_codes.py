@@ -9,8 +9,8 @@ safety.
 
 The generator VALIDATES the source first (via ahimsa.error_codes.load_error_codes)
 and refuses — fail-loud, non-zero exit — to generate from a malformed registry.
-This is intentionally NOT the report-only aggregator: codegen from an invalid
-file would defeat the whole point, so it blocks.
+This is a distinct single-file codegen guard (not the cross-repo aggregator):
+codegen from an invalid file would defeat the whole point, so it blocks.
 
 Usage:
     python scripts/gen_error_codes.py <error-codes.yaml> [--out <module.py>]

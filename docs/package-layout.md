@@ -14,7 +14,7 @@ ahimsa/                   — installable package (import as `ahimsa`)
   stub_resolver.py        — offline stub resolver used by tests/tooling
   _config.py              — config loader (walk-up algorithm)
   manomatika_error.py     — ecosystem-shared `ManoMatikaError` base class + the `<COMPONENT>-<FAC>-<NNN>` code pattern (run R0)
-  error_codes.py          — error-code MECHANISM: schema, lints, report-only aggregator, codegen (run R0)
+  error_codes.py          — error-code MECHANISM: schema, lints, BLOCKING cross-repo aggregator + registry-parity, codegen (run R0 mechanism; aggregator flipped to blocking R6)
   error_code_constants.py — AUTO-GENERATED typed constants for ahimsa's own 31 codes (run R5; regenerate via `scripts/gen_error_codes.py error-codes.yaml --out ahimsa/error_code_constants.py`; do not hand-edit)
   locales/en.json         — ahimsa's en-only error catalog (`errors.<CODE>` -> message, sourced from `error-codes.yaml`); ahimsa is the English-only carve-out, no es catalog
 tests/                    — pytest test suite
