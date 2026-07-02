@@ -16,7 +16,7 @@ import os
 import re
 import sys
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import requests
@@ -71,6 +71,11 @@ class AppLugManifest:
     id: str
     version: str
     matika_version: str
+    # UI locales the applug declares it ships translations for (applug.json
+    # ``supported_locales``). Defaults to empty when the manifest omits the
+    # field — an applug that declares nothing constrains nothing, so the
+    # subset check below is trivially satisfied.
+    supported_locales: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -96,10 +101,12 @@ class BaseResolver(ABC):
         canonical = self._canonicalize_repo(owner, repo_name)
         url = self._raw_url(canonical, tag, "applug.json")
         data = self._fetch_json(url)
+        raw_locales = data.get("supported_locales") or []
         return AppLugManifest(
             id=data.get("id", ""),
             version=data.get("version", ""),
             matika_version=data.get("matika_version", ""),
+            supported_locales=list(raw_locales) if isinstance(raw_locales, list) else [],
         )
 
     def _parse_repo(self, repo: str) -> tuple[str, str]:
@@ -182,6 +189,23 @@ class BaseResolver(ABC):
         Required for the same reason as `list_tags` — silent no-ops on
         this surface would mask drift.
         """
+
+    def matika_supported_locales(self, repo: str, ref: str) -> set[str] | None:
+        """Return the UI locale codes matika ships at *repo* @ *ref*, or None.
+
+        Mirrors ``matika.i18n.SUPPORTED_LOCALES`` — which matika discovers as
+        the stems of ``src/matika/locales/*.json`` (see
+        ``matika/core/i18n_completeness.discover_catalogs``). This is the
+        AUTHORITY an applug's declared ``supported_locales`` must be a subset
+        of, read from the SHA-pinned matika source the recipe already points at.
+
+        Unlike the mandatory release-log surface (`list_tags` / `fetch_text`),
+        source introspection is OPTIONAL: a resolver whose host cannot list a
+        directory returns None, and the caller then simply skips the
+        subset check (there is no authority to check against). Concrete
+        subclasses that CAN introspect override this.
+        """
+        return None
 
 
 class GitHubResolver(BaseResolver):
@@ -283,6 +307,48 @@ class GitHubResolver(BaseResolver):
         url = self._raw_url(canonical, ref, path)
         return self._fetch_text(url)
 
+    # Path matika discovers its core UI locales from (see
+    # matika.i18n._CORE_LOCALES_DIR / discover_catalogs).
+    _MATIKA_LOCALES_DIR = "src/matika/locales"
+
+    def matika_supported_locales(self, repo: str, ref: str) -> set[str] | None:
+        """List ``src/matika/locales/*.json`` at *ref* via the contents API and
+        return the locale-code stems (e.g. ``{"en", "es"}``).
+
+        Faithfully mirrors matika's own discovery: every ``<lang>.json`` in the
+        core locales dir contributes ``<lang>``. A 404 on the directory means
+        the pinned matika source has no core locale dir at this ref (a packaging
+        defect on matika's side, not ahimsa's to adjudicate here) — return None
+        so the caller skips the subset check rather than reporting a phantom
+        violation against an empty set.
+        """
+        owner, repo_name = self._parse_repo(repo)
+        canonical_owner, canonical_repo = self._canonicalize_repo(owner, repo_name)
+        url = (
+            f"https://api.github.com/repos/{canonical_owner}/{canonical_repo}"
+            f"/contents/{self._MATIKA_LOCALES_DIR}"
+        )
+        resp = requests.get(
+            url,
+            timeout=10,
+            headers={"Accept": "application/vnd.github+json", **self._request_headers()},
+            params={"ref": ref},
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        entries = resp.json()
+        if not isinstance(entries, list):
+            return None
+        return {
+            entry["name"][: -len(".json")]
+            for entry in entries
+            if isinstance(entry, dict)
+            and entry.get("type") == "file"
+            and isinstance(entry.get("name"), str)
+            and entry["name"].endswith(".json")
+        }
+
 
 # ---------------------------------------------------------------------------
 # Resolver registry and dispatch
@@ -354,6 +420,73 @@ def _check_bundle_id(errors: list[Error], value: str, pointer: str) -> None:
             f'not a valid reverse-DNS identifier ("{value}")',
             code=ec.AHIMSA_APP_003,
         ))
+
+
+def _check_supported_locales(
+    errors: list[Error],
+    *,
+    applug_id: str,
+    declared: list[str],
+    mm_supported: set[str],
+    pointer: str,
+) -> None:
+    """Assert an applug's declared UI locales are a subset of matika's.
+
+    *declared* is the applug.json ``supported_locales``; *mm_supported* is the
+    set of UI locales the SHA-pinned matika ships (its ``i18n.SUPPORTED_LOCALES``).
+    A declared locale matika does not support means the product would advertise a
+    locale it cannot actually render, so it FAILS the build/validate.
+
+    Pure and injectable: the authority set is passed in, never read from a live
+    checkout, so this is unit-testable without a matika clone. Fail-loud (rule
+    18): the finding names the applug, EVERY offending locale, and the full
+    supported set so the operator can act without re-deriving anything.
+    """
+    unsupported = sorted(loc for loc in declared if loc not in mm_supported)
+    if unsupported:
+        errors.append(Error(
+            pointer,
+            f'applug "{applug_id}" declares supported_locales {sorted(declared)}, '
+            f'including {unsupported} not supported by matika '
+            f'(matika supports {sorted(mm_supported)})',
+            code=ec.AHIMSA_RESOLVE_010,
+        ))
+
+
+def _resolve_matika_supported_locales(
+    matika: dict,
+    *,
+    resolvers: dict[str, BaseResolver] | None,
+    allowed_hosts: list[str] | None,
+) -> set[str] | None:
+    """Read matika's UI-locale set from the SHA-pinned matika source, or None.
+
+    Selects a resolver for the recipe's ``matika.repo`` (the injected map, or
+    the default host registry) and asks it for ``matika_supported_locales`` at
+    ``matika.tag``. Returns None — meaning "authority unavailable, skip the
+    subset check" — when the repo/tag is absent, no resolver serves the host,
+    the resolver cannot introspect a source tree, or the fetch fails. It never
+    raises: an unreadable authority must not crash recipe validation.
+    """
+    repo = matika.get("repo")
+    ref = matika.get("tag")
+    if not repo or not ref:
+        return None
+
+    if resolvers is not None:
+        res: BaseResolver | None = resolvers.get(repo.split("/", 1)[0])
+    else:
+        try:
+            res = resolver_for(repo, allowed_hosts=allowed_hosts or [])
+        except (PermissionError, LookupError):
+            return None
+    if res is None:
+        return None
+
+    try:
+        return res.matika_supported_locales(repo, ref)
+    except (requests.RequestException, LookupError, PermissionError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +603,19 @@ def validate(
                 code=ec.AHIMSA_PLUG_002,
             ))
 
+    # --- Matika locale authority (for the applug supported_locales subset check) ---
+    #
+    # Read matika's UI-locale set (i18n.SUPPORTED_LOCALES) once, from the same
+    # SHA-pinned matika source the recipe points at, so each applug's declared
+    # supported_locales can be checked against it below. None when it can't be
+    # determined — an injected resolver that can't introspect a source tree, an
+    # unresolvable matika repo/tag, or a transient fetch failure — in which case
+    # the subset check is skipped (there is no authority to check against, so we
+    # never invent a phantom violation).
+    mm_supported_locales = _resolve_matika_supported_locales(
+        matika, resolvers=resolvers, allowed_hosts=allowed_hosts,
+    )
+
     # --- Remote verification ---
     for i, plug in structurally_valid:
         ptr = f"applugs[{i}]"
@@ -519,6 +665,14 @@ def validate(
                 f'applug.json version "{manifest.version}" does not match recipe version "{plug["version"]}"',
                 code=ec.AHIMSA_RESOLVE_008,
             ))
+        if mm_supported_locales is not None:
+            _check_supported_locales(
+                errors,
+                applug_id=manifest.id or name,
+                declared=manifest.supported_locales,
+                mm_supported=mm_supported_locales,
+                pointer=f"{ptr}.resolve",
+            )
         if manifest.matika_version != plug["matika_version"]:
             errors.append(Error(
                 f"{ptr}.resolve",

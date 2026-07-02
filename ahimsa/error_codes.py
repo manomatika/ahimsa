@@ -10,7 +10,9 @@ provides:
   - the SCHEMA constants (closed severity/log_route sets, origin<->component map)
     and the loader that reads an ``error-codes.yaml`` into typed objects;
   - the LINTS that validate a single file for well-formedness, schema
-    conformance, and per-file uniqueness/contiguity rules;
+    conformance, and per-file code uniqueness (numbers are opaque and
+    MONOTONIC — reserved/retired/skipped values are allowed, so gaps are NOT
+    a defect; only a duplicate is);
   - the report-only AGGREGATOR that merges every origin's file and validates the
     merged registry (cross-file uniqueness, component-prefix disjointness). At
     this phase (R0) the aggregator is REPORT-ONLY: it prints findings but NEVER
@@ -196,9 +198,11 @@ def lint_error_codes(raw: RawErrorCodesFile) -> list[Error]:
       - each ``code`` matches ``<COMPONENT>-<FAC>-<NNN>``;
       - each code's component prefix equals the file's declared component;
       - ``severity`` / ``log_route`` are in their closed sets;
-      - codes are unique within the file;
-      - per (origin, facility) the NNN values are contiguous from 001 with no
-        gaps or duplicates.
+      - codes are unique within the file — which, since the component prefix is
+        forced equal to the file's declared component, also makes each
+        (origin, facility) NNN unique. NNN values are opaque and MONOTONIC:
+        reserved / retired / skipped numbers are expected, so GAPS are allowed
+        (``001, 002, 004`` is valid); only a DUPLICATE is a defect.
 
     An empty ``codes`` list (the reserved ``manomatika`` namespace) is valid.
     """
@@ -242,8 +246,6 @@ def lint_error_codes(raw: RawErrorCodesFile) -> list[Error]:
 
     # --- per-code checks ---
     seen: dict[str, int] = {}
-    # facility -> sorted list of (number, code) for contiguity checking.
-    by_facility: dict[str, list[tuple[int, str]]] = {}
 
     for i, item in enumerate(raw.raw_codes):
         cptr = _pointer(origin, f".codes[{i}]")
@@ -269,7 +271,7 @@ def lint_error_codes(raw: RawErrorCodesFile) -> list[Error]:
                 f"log_route {log_route!r} not in closed set {list(LOG_ROUTES)}"
             )))
 
-        # code well-formedness + prefix agreement + uniqueness + contiguity.
+        # code well-formedness + prefix agreement + uniqueness.
         if not isinstance(code, str) or not CODE_RE.match(code):
             errors.append(Error(cptr, (
                 f"code {code!r} is not well-formed; expected "
@@ -277,7 +279,7 @@ def lint_error_codes(raw: RawErrorCodesFile) -> list[Error]:
             )))
             continue
 
-        code_component, facility, number = parse_code(code)
+        code_component, _facility, _number = parse_code(code)
         if isinstance(component, str) and component and code_component != component:
             errors.append(Error(
                 _pointer(origin, f'.codes["{code}"]'),
@@ -285,6 +287,12 @@ def lint_error_codes(raw: RawErrorCodesFile) -> list[Error]:
                 f"component {component!r}",
             ))
 
+        # Uniqueness is enforced on the whole code string. Because the prefix
+        # is required to equal the file's component (checked above), a unique
+        # code string also guarantees a unique (facility, NNN) pair — so no
+        # separate per-facility number check is needed. NNN values are opaque
+        # and MONOTONIC: gaps (reserved/retired/skipped numbers) are allowed;
+        # only a genuine duplicate is a defect.
         if code in seen:
             errors.append(Error(
                 _pointer(origin, f'.codes["{code}"]'),
@@ -292,17 +300,6 @@ def lint_error_codes(raw: RawErrorCodesFile) -> list[Error]:
             ))
         else:
             seen[code] = i
-            by_facility.setdefault(facility, []).append((number, code))
-
-    # --- per-facility contiguity: numbers must be exactly 1..N, no gaps/dups ---
-    for facility in sorted(by_facility):
-        numbers = sorted(n for n, _ in by_facility[facility])
-        expected = list(range(1, len(numbers) + 1))
-        if numbers != expected:
-            errors.append(Error(
-                _pointer(origin, f".facility[{facility}]"),
-                f"NNN not contiguous from 001: expected {expected}, got {numbers}",
-            ))
 
     return errors
 

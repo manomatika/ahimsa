@@ -27,6 +27,7 @@ AHIMSA_RESOLVE_006 = 'AHIMSA-RESOLVE-006'
 AHIMSA_RESOLVE_007 = 'AHIMSA-RESOLVE-007'
 AHIMSA_RESOLVE_008 = 'AHIMSA-RESOLVE-008'
 AHIMSA_RESOLVE_009 = 'AHIMSA-RESOLVE-009'
+AHIMSA_RESOLVE_010 = 'AHIMSA-RESOLVE-010'
 AHIMSA_RELEASE_001 = 'AHIMSA-RELEASE-001'
 AHIMSA_RELEASE_002 = 'AHIMSA-RELEASE-002'
 AHIMSA_RELEASE_003 = 'AHIMSA-RELEASE-003'
@@ -60,6 +61,7 @@ ALL_CODES = frozenset({
     'AHIMSA-RESOLVE-007',
     'AHIMSA-RESOLVE-008',
     'AHIMSA-RESOLVE-009',
+    'AHIMSA-RESOLVE-010',
     'AHIMSA-RELEASE-001',
     'AHIMSA-RELEASE-002',
     'AHIMSA-RELEASE-003',
@@ -94,6 +96,7 @@ CODE_METADATA = {
     'AHIMSA-RESOLVE-007': {'severity': 'error', 'log_route': 'n/a', 'facility': 'RESOLVE'},
     'AHIMSA-RESOLVE-008': {'severity': 'error', 'log_route': 'n/a', 'facility': 'RESOLVE'},
     'AHIMSA-RESOLVE-009': {'severity': 'error', 'log_route': 'n/a', 'facility': 'RESOLVE'},
+    'AHIMSA-RESOLVE-010': {'severity': 'error', 'log_route': 'n/a', 'facility': 'RESOLVE'},
     'AHIMSA-RELEASE-001': {'severity': 'error', 'log_route': 'n/a', 'facility': 'RELEASE'},
     'AHIMSA-RELEASE-002': {'severity': 'error', 'log_route': 'n/a', 'facility': 'RELEASE'},
     'AHIMSA-RELEASE-003': {'severity': 'error', 'log_route': 'n/a', 'facility': 'RELEASE'},

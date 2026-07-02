@@ -12,11 +12,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import ahimsa._config as _config_module
+from ahimsa import error_code_constants as ec
 from ahimsa.validate_recipe import (
     AppLugManifest,
     BaseResolver,
     Error,
     GitHubResolver,
+    _check_supported_locales,
     _repo_cache,
     resolver_for,
     validate,
@@ -462,6 +464,180 @@ def test_applug_json_matika_version_mismatch_fails(tmp_path):
     assert any("resolve" in e.pointer for e in errors)
     err = next(e for e in errors if "resolve" in e.pointer and "matika_version" in e.message)
     assert '"0.0.1"' in err.message
+
+
+# ---------------------------------------------------------------------------
+# Build-time locale validation (A2): an applug's declared supported_locales
+# must be a SUBSET of matika's supported UI-locale set.
+# ---------------------------------------------------------------------------
+
+# The pure check is hermetic: the authority set is passed in as an argument, so
+# these never touch a live matika checkout (rule 21 — no env artifact).
+MM_SUPPORTED = {"en", "es"}
+
+
+def _locale_errors(applug_id: str, declared: list[str], mm_supported: set[str]) -> list[Error]:
+    errors: list[Error] = []
+    _check_supported_locales(
+        errors,
+        applug_id=applug_id,
+        declared=declared,
+        mm_supported=mm_supported,
+        pointer="applugs[0].resolve",
+    )
+    return errors
+
+
+def test_locale_subset_unsupported_fails_with_code_and_data():
+    """An applug declaring 'fr' (not in {en, es}) fails with AHIMSA-RESOLVE-010,
+    and the message carries the applug id, the offending locale, and the
+    supported set (rule 18 — fail loud, most-data-available)."""
+    errors = _locale_errors("eyerate", ["en", "fr"], MM_SUPPORTED)
+    assert len(errors) == 1
+    err = errors[0]
+    assert err.code == ec.AHIMSA_RESOLVE_010
+    assert err.pointer == "applugs[0].resolve"
+    assert "eyerate" in err.message        # applug id
+    assert "'fr'" in err.message           # offending locale
+    assert "'en'" in err.message and "'es'" in err.message  # supported set
+
+
+def test_locale_subset_multiple_unsupported_all_reported():
+    """Every offending locale is named, not just the first."""
+    errors = _locale_errors("eyerate", ["fr", "de"], MM_SUPPORTED)
+    assert len(errors) == 1
+    assert "'fr'" in errors[0].message and "'de'" in errors[0].message
+
+
+def test_locale_subset_full_set_passes():
+    """Declaring exactly matika's set [en, es] is a subset — passes."""
+    assert _locale_errors("eyerate", ["en", "es"], MM_SUPPORTED) == []
+
+
+def test_locale_subset_proper_subset_passes():
+    """Declaring a proper subset [en] passes."""
+    assert _locale_errors("eyerate", ["en"], MM_SUPPORTED) == []
+
+
+def test_locale_subset_empty_declaration_passes():
+    """An applug that declares no locales constrains nothing — passes."""
+    assert _locale_errors("eyerate", [], MM_SUPPORTED) == []
+
+
+def test_locale_subset_reference_eyerate_shape_passes():
+    """The reference eyerate applug.json shape (supported_locales [en, es])
+    passes cleanly against matika's {en, es}."""
+    assert _locale_errors("eyerate", ["en", "es"], MM_SUPPORTED) == []
+
+
+class _LocaleResolver(BaseResolver):
+    """Resolves a manifest carrying supported_locales and advertises a fixed
+    matika UI-locale set, exercising the validate() wiring end-to-end without
+    network."""
+
+    def __init__(self, manifest: AppLugManifest, mm_locales: set[str] | None) -> None:
+        super().__init__(host="github.com")
+        self._manifest = manifest
+        self._mm_locales = mm_locales
+
+    def _canonicalize_repo(self, owner, repo): return (owner, repo)
+    def _raw_url(self, canonical, tag, path): return ""
+    def resolve(self, name, repo, tag): return self._manifest
+    def list_tags(self, repo): return []
+    def fetch_text(self, repo, ref, path): return None
+
+    def matika_supported_locales(self, repo, ref):
+        return self._mm_locales
+
+
+def test_validate_wiring_unsupported_locale_fails(tmp_path):
+    """End-to-end through validate(): an applug whose applug.json declares 'fr'
+    fails the build with AHIMSA-RESOLVE-010, matika's set read from the resolver."""
+    manifest = AppLugManifest(
+        id="eyerate", version="0.0.2", matika_version="0.0.2",
+        supported_locales=["en", "fr"],
+    )
+    path = write_recipe(tmp_path, VALID_RECIPE)
+    errors = validate(
+        path, resolvers={"github.com": _LocaleResolver(manifest, {"en", "es"})},
+    )
+    err = next(e for e in errors if e.code == ec.AHIMSA_RESOLVE_010)
+    assert err.pointer == "applugs[0].resolve"
+    assert "fr" in err.message
+
+
+def test_validate_wiring_supported_locale_passes(tmp_path):
+    """An applug declaring [en, es] passes end-to-end (no RESOLVE-010)."""
+    manifest = AppLugManifest(
+        id="eyerate", version="0.0.2", matika_version="0.0.2",
+        supported_locales=["en", "es"],
+    )
+    path = write_recipe(tmp_path, VALID_RECIPE)
+    errors = validate(
+        path, resolvers={"github.com": _LocaleResolver(manifest, {"en", "es"})},
+    )
+    assert not any(e.code == ec.AHIMSA_RESOLVE_010 for e in errors)
+
+
+def test_validate_wiring_skips_when_authority_unavailable(tmp_path):
+    """When matika's locale set can't be determined (resolver returns None),
+    the subset check is skipped rather than inventing a phantom violation."""
+    manifest = AppLugManifest(
+        id="eyerate", version="0.0.2", matika_version="0.0.2",
+        supported_locales=["en", "fr"],
+    )
+    path = write_recipe(tmp_path, VALID_RECIPE)
+    errors = validate(
+        path, resolvers={"github.com": _LocaleResolver(manifest, None)},
+    )
+    assert not any(e.code == ec.AHIMSA_RESOLVE_010 for e in errors)
+
+
+def test_github_resolver_matika_supported_locales_lists_json_stems():
+    """GitHubResolver reads matika's UI-locale set from the contents API listing
+    of src/matika/locales, returning the *.json stems (mirrors matika's own
+    discover_catalogs) and ignoring non-json entries."""
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+    try:
+        resolver = GitHubResolver()
+        canon = _make_mock_response({"full_name": "manomatika/matika"})
+        contents = _make_mock_response([
+            {"name": "en.json", "type": "file"},
+            {"name": "es.json", "type": "file"},
+            {"name": "README.md", "type": "file"},
+        ])
+
+        def fake_get(url, **kwargs):
+            return canon if ("api.github.com/repos/" in url and "/contents/" not in url) else contents
+
+        with patch("requests.get", side_effect=fake_get):
+            locales = resolver.matika_supported_locales("github.com/manomatika/matika", "v0.0.4")
+        assert locales == {"en", "es"}
+    finally:
+        vr._repo_cache.clear()
+
+
+def test_github_resolver_matika_supported_locales_404_returns_none():
+    """A 404 on the locales dir yields None (skip the check), not an empty set."""
+    import ahimsa.validate_recipe as vr
+    vr._repo_cache.clear()
+    try:
+        resolver = GitHubResolver()
+        canon = _make_mock_response({"full_name": "manomatika/matika"})
+        not_found = MagicMock()
+        not_found.status_code = 404
+        not_found.json.return_value = {"message": "Not Found"}
+        not_found.raise_for_status.return_value = None
+
+        def fake_get(url, **kwargs):
+            return canon if ("api.github.com/repos/" in url and "/contents/" not in url) else not_found
+
+        with patch("requests.get", side_effect=fake_get):
+            locales = resolver.matika_supported_locales("github.com/manomatika/matika", "v0.0.4")
+        assert locales is None
+    finally:
+        vr._repo_cache.clear()
 
 
 # ---------------------------------------------------------------------------

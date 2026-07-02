@@ -4,7 +4,9 @@ Run R5 (manomatika/ahimsa#128): ahimsa's own 31 error codes + `validate_recipe.E
 Three concerns, each with its own section below:
 
   1. Registry integrity — ``error-codes.yaml`` lints clean under the R0
-     mechanism, declares exactly 31 codes contiguous per facility, is
+     mechanism, declares exactly 32 codes (ahimsa numbers each facility
+     contiguously from 001 by convention, though the lint no longer requires
+     it — NNN is opaque/monotonic and gaps are allowed), is
      English-only (``supported_locales: [en]`` — ahimsa is the en-only
      carve-out, no es catalog), the checked-in
      ``ahimsa/error_code_constants.py`` is byte-identical to what the
@@ -205,13 +207,17 @@ def test_registry_lints_clean_and_is_ahimsa_english_only():
     assert ecf.supported_locales == ["en"]  # the English-only carve-out — no es
 
 
-def test_registry_declares_exactly_31_codes():
+def test_registry_declares_exactly_32_codes():
     ecf = load_error_codes(REGISTRY_PATH)
-    assert len(ecf.codes) == 31
+    assert len(ecf.codes) == 32
 
 
 def test_registry_facilities_are_contiguous_from_001():
-    """Belt-and-suspenders on top of the R0 lint: recompute contiguity directly."""
+    """ahimsa numbers each of its OWN facilities contiguously from 001 as a
+    housekeeping convention. The lint no longer REQUIRES contiguity (NNN is
+    opaque/monotonic — gaps are allowed ecosystem-wide); this asserts ahimsa's
+    self-imposed tidiness so an accidental gap in ahimsa's own registry is
+    noticed and made deliberate."""
     ecf = load_error_codes(REGISTRY_PATH)
     by_facility: dict[str, list[int]] = {}
     for c in ecf.codes:
