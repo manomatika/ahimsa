@@ -776,6 +776,49 @@ def _terminate_foreign_holder(proc: "subprocess.Popen[bytes]") -> None:
 # cold Windows runner, yet far under the 120s gate budget.
 _FAST_FAIL_LOUD_LIMIT_S = 30.0
 
+# The canonical error CODE the matika launcher emits on the foreign / ambiguous
+# port-holder path — from both ``_handle_port_conflict`` (a true foreign holder)
+# and ``_resolve_port_conflict`` (an unidentifiable / ambiguous holder), each of
+# which ``logger.error("[%s] … refusing to kill …", MATIKA_LNCH_003, …)`` then
+# ``sys.exit(1)``. Keying the frozen assertion on the CODE (not on prose) makes
+# it stable against message-wording churn and specific to THIS path: the generic
+# uncaught-startup code MATIKA-LNCH-001 is emitted only by ``_excepthook`` and
+# never appears on the foreign-holder exit (which never reaches the excepthook).
+# See manomatika/ahimsa#130 — note its title mislabels this as LNCH-001.
+_FOREIGN_HOLDER_CODE = "MATIKA-LNCH-003"
+
+# Secondary (non-keyed) human-prose signals — kept only for a richer log line,
+# NOT asserted: the CODE above is the single canonical keyed assertion (rule 18).
+_FOREIGN_HOLDER_PROSE_KEYWORDS = ["NOT identified as a ManoMatika process", "refusing to kill"]
+
+
+def _assert_foreign_fail_loud(out: str, port: int) -> str:
+    """Pure assertion over the frozen app's foreign-holder fail-loud OUTPUT.
+
+    Keys on the emitted error CODE ``MATIKA-LNCH-003`` — the launcher's stable,
+    canonical foreign-holder signal — rather than on prose wording. Also requires
+    the port to be named so a fail-loud line for some *other* port can never be
+    mistaken for this one. The human-prose keywords are matched only to enrich
+    the returned summary; they are NOT part of the pass/fail decision.
+
+    Returns a short human-readable match summary for logging. Raises
+    ``AssertionError`` (fail loud, fail specific — rule 18) when the output is
+    missing the code, carries a wrong code (e.g. MATIKA-LNCH-001), or omits the
+    port.
+    """
+    assert _FOREIGN_HOLDER_CODE in out, (
+        f"foreign-holder-test: fail-loud output must carry the foreign-holder "
+        f"error code {_FOREIGN_HOLDER_CODE!r} (emitted by the matika launcher's "
+        f"_handle_port_conflict / _resolve_port_conflict foreign path); it was "
+        f"absent. output:\n{out}"
+    )
+    assert str(port) in out, (
+        f"foreign-holder-test: fail-loud output must name the port {port}; "
+        f"output:\n{out}"
+    )
+    prose = next((kw for kw in _FOREIGN_HOLDER_PROSE_KEYWORDS if kw in out), None)
+    return f"code {_FOREIGN_HOLDER_CODE}" + (f" (+ prose {prose!r})" if prose else "")
+
 
 def assert_foreign_holder_not_killed(exe: str, port: int, timeout: int) -> None:
     """A real FOREIGN (non-ManoMatika) port holder must NEVER be killed, and the
@@ -790,8 +833,9 @@ def assert_foreign_holder_not_killed(exe: str, port: int, timeout: int) -> None:
             (``_FAST_FAIL_LOUD_LIMIT_S``), proving there is no blocking modal
             dialog (the ~120s "did not exit within timeout" hang) and no wasted
             boot work on a doomed port;
-      (iii) emits a fail-loud message naming the port AND the foreign-holder
-            reason.
+      (iii) emits a fail-loud message carrying the foreign-holder error CODE
+            (``MATIKA-LNCH-003``) AND naming the port (see
+            ``_assert_foreign_fail_loud``).
 
     Since the matika launcher's foreign path now only logs + exits (no kill
     logic remains on it, and its error dialog is gated behind an interactive /
@@ -837,19 +881,9 @@ def assert_foreign_holder_not_killed(exe: str, port: int, timeout: int) -> None:
                 f"slow exit signals a blocking modal dialog or wasted boot work "
                 f"over a doomed port. output:\n{out}"
             )
-            fail_loud_keywords = ["NOT identified as a ManoMatika process", "refusing to kill"]
-            match = next((kw for kw in fail_loud_keywords if kw in out), None)
-            assert match is not None, (
-                f"foreign-holder-test: app exited {proc.returncode} but the fail-loud "
-                f"message didn't name the foreign-holder reason (checked for: "
-                f"{fail_loud_keywords!r}); output:\n{out}"
-            )
-            assert str(port) in out, (
-                f"foreign-holder-test: fail-loud output must name the port {port}; "
-                f"output:\n{out}"
-            )
+            match = _assert_foreign_fail_loud(out, port)
             print(f"  · foreign-holder-test: app failed loud (exit {proc.returncode}) "
-                  f"in {elapsed:.1f}s without killing the foreign holder: matched {match!r}")
+                  f"in {elapsed:.1f}s without killing the foreign holder: matched {match}")
 
             # The foreign holder — a genuinely independent process — must still be
             # alive AND still listening. Checked directly against the spawned

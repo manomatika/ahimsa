@@ -1209,9 +1209,9 @@ class TestForeignHolderRegression:
     def test_foreign_holder_fails_loud_and_listener_stays_bound(self, fv, monkeypatch, tmp_path):
         port = _free_port()
         message = (
-            f"port {port} held by pid 4242, which is NOT identified as a "
-            f"ManoMatika process (healthz unreachable); refusing to kill a "
-            f"foreign process — failing loud\n"
+            f"[MATIKA-LNCH-003] port {port} held by pid 4242, which is NOT "
+            f"identified as a ManoMatika process (healthz unreachable); refusing "
+            f"to kill a foreign process — failing loud\n"
         )
         class FakeProc:
             returncode = 1
@@ -1238,7 +1238,10 @@ class TestForeignHolderRegression:
         with pytest.raises(AssertionError, match="must exit non-zero"):
             fv.assert_foreign_holder_not_killed("fake-exe", port, 30)
 
-    def test_foreign_holder_fails_when_message_missing_reason(self, fv, monkeypatch, tmp_path):
+    def test_foreign_holder_fails_when_code_absent(self, fv, monkeypatch, tmp_path):
+        """A non-zero, fast exit whose output does NOT carry the foreign-holder
+        error code MATIKA-LNCH-003 is not a proven foreign-holder refusal — it
+        must fail the (now CODE-keyed) assertion, not be treated as success."""
         port = _free_port()
         class FakeProc:
             returncode = 1
@@ -1248,7 +1251,7 @@ class TestForeignHolderRegression:
         monkeypatch.setattr(fv.tempfile, "mkdtemp", lambda **kw: str(tmp_path))
         monkeypatch.setattr(fv.shutil, "rmtree", lambda *a, **kw: None)
 
-        with pytest.raises(AssertionError, match="didn't name the foreign-holder reason"):
+        with pytest.raises(AssertionError, match="must carry the foreign-holder error code"):
             fv.assert_foreign_holder_not_killed("fake-exe", port, 30)
 
     def test_foreign_holder_fails_when_app_hangs(self, fv, monkeypatch, tmp_path):
@@ -1455,13 +1458,14 @@ class TestAssertForeignHolderNotKilled:
         exe = _write_fake_app(
             tmp_path,
             message=(
-                f"ERROR: port {port} held by pid 999, which is NOT identified as a "
-                f"ManoMatika process; refusing to kill a foreign process — failing loud"
+                f"[MATIKA-LNCH-003] port {port} held by pid 999, which is NOT "
+                f"identified as a ManoMatika process; refusing to kill a foreign "
+                f"process — failing loud"
             ),
             exit_code=1,
         )
-        # Must NOT raise: faithful fast fail-loud, non-zero, names port + reason,
-        # and the fake never touches the holder.
+        # Must NOT raise: faithful fast fail-loud, non-zero, carries the error
+        # code + names the port, and the fake never touches the holder.
         fv.assert_foreign_holder_not_killed(exe, port, timeout=30)
 
     def test_fails_when_app_exits_zero(self, fv, tmp_path):
@@ -1474,21 +1478,23 @@ class TestAssertForeignHolderNotKilled:
         with pytest.raises(AssertionError, match="must exit non-zero"):
             fv.assert_foreign_holder_not_killed(exe, port, timeout=30)
 
-    def test_fails_when_reason_keyword_absent(self, fv, tmp_path):
+    def test_fails_when_code_absent(self, fv, tmp_path):
         port = _free_tcp_port()
         exe = _write_fake_app(
             tmp_path,
-            message=f"port {port} is busy, giving up",  # non-zero but no foreign reason
+            message=f"port {port} is busy, giving up",  # non-zero but no error code
             exit_code=1,
         )
-        with pytest.raises(AssertionError, match="foreign-holder reason"):
+        with pytest.raises(AssertionError, match="must carry the foreign-holder error code"):
             fv.assert_foreign_holder_not_killed(exe, port, timeout=30)
 
     def test_fails_when_port_not_named(self, fv, tmp_path):
         port = _free_tcp_port()
         exe = _write_fake_app(
             tmp_path,
-            message="a process is NOT identified as a ManoMatika process; refusing to kill",
+            # Carries the code but omits the port — a fail-loud line for some
+            # OTHER port must never satisfy THIS port's assertion.
+            message="[MATIKA-LNCH-003] a process is NOT identified as a ManoMatika process; refusing to kill",
             exit_code=1,
         )
         with pytest.raises(AssertionError, match=f"must name the port {port}"):
@@ -1502,10 +1508,80 @@ class TestAssertForeignHolderNotKilled:
         exe = _write_fake_app(
             tmp_path,
             message=(
-                f"port {port} NOT identified as a ManoMatika process; refusing to kill"
+                f"[MATIKA-LNCH-003] port {port} NOT identified as a ManoMatika "
+                f"process; refusing to kill"
             ),
             exit_code=1,
             sleep_s=1.0,  # > the patched 0.2s fast limit, < the 30s timeout budget
         )
         with pytest.raises(AssertionError, match="FAIL LOUD FAST"):
             fv.assert_foreign_holder_not_killed(exe, port, timeout=30)
+
+
+# ---------------------------------------------------------------------------
+# _assert_foreign_fail_loud — the PURE output-checking core, keyed on the
+# emitted error CODE (manomatika/ahimsa#130). rule-22 regression: proves the
+# assertion keys on MATIKA-LNCH-003 (the code the matika launcher's foreign
+# path actually prints), NOT on prose and NOT on the generic startup code
+# MATIKA-LNCH-001. These are pure-string checks (no subprocess), so they run on
+# every platform. They FAIL against the pre-flip prose-keyed behavior — which
+# had no code assertion and would accept a wrong-code / no-code output — and
+# PASS with the flip.
+#
+# #130's title mislabels the foreign-holder code as MATIKA-LNCH-001; the launcher
+# emits MATIKA-LNCH-003 from _handle_port_conflict / _resolve_port_conflict, while
+# MATIKA-LNCH-001 is the generic uncaught-startup code from _excepthook and never
+# appears on the foreign-holder exit. Keying on LNCH-001 would keep the frozen
+# gate permanently RED; hence the assertion (and these tests) key on LNCH-003.
+# ---------------------------------------------------------------------------
+class TestAssertForeignFailLoud:
+    """Pure keyed-on-CODE assertion (manomatika/ahimsa#130, rule 22)."""
+
+    def _faithful(self, port: int) -> str:
+        """The exact shape of the launcher's foreign-holder log line."""
+        return (
+            f"[MATIKA-LNCH-003] port {port} held by pid 4242, which is NOT "
+            f"identified as a ManoMatika process (healthz unreachable); refusing "
+            f"to kill a foreign process — failing loud\n"
+        )
+
+    def test_passes_on_code_and_port(self, fv):
+        # Returns a non-empty match summary naming the code; must NOT raise.
+        summary = fv._assert_foreign_fail_loud(self._faithful(8000), 8000)
+        assert "MATIKA-LNCH-003" in summary
+
+    def test_summary_notes_prose_when_present(self, fv):
+        # The faithful line carries prose keywords; the summary surfaces one of
+        # them as a secondary (non-keyed) signal alongside the code.
+        summary = fv._assert_foreign_fail_loud(self._faithful(8000), 8000)
+        assert "+ prose" in summary
+        assert any(kw in summary for kw in fv._FOREIGN_HOLDER_PROSE_KEYWORDS)
+
+    def test_passes_on_code_and_port_without_any_prose(self, fv):
+        # CODE + port is sufficient — prose is NOT required for the pass.
+        out = "[MATIKA-LNCH-003] conflict on port 9001\n"
+        summary = fv._assert_foreign_fail_loud(out, 9001)
+        assert "MATIKA-LNCH-003" in summary
+
+    def test_raises_when_code_absent(self, fv):
+        # Prose present, port present, but NO code -> must raise (pre-flip PASSED).
+        out = "port 8000 NOT identified as a ManoMatika process; refusing to kill\n"
+        with pytest.raises(AssertionError, match="must carry the foreign-holder error code"):
+            fv._assert_foreign_fail_loud(out, 8000)
+
+    def test_raises_on_wrong_code_lnch_001(self, fv):
+        # The generic startup code MATIKA-LNCH-001 must NOT satisfy the assertion:
+        # it is never emitted on the foreign-holder path (issue #130 mislabel).
+        out = (
+            "[MATIKA-LNCH-001] Uncaught fatal exception during application "
+            "startup on port 8000; refusing to kill\n"
+        )
+        with pytest.raises(AssertionError, match="must carry the foreign-holder error code"):
+            fv._assert_foreign_fail_loud(out, 8000)
+
+    def test_raises_when_port_absent(self, fv):
+        # Code present but the port is NOT named -> must raise: a fail-loud line
+        # for a DIFFERENT port must never satisfy this port's assertion.
+        out = "[MATIKA-LNCH-003] a foreign process holds the port; refusing to kill\n"
+        with pytest.raises(AssertionError, match="must name the port 8000"):
+            fv._assert_foreign_fail_loud(out, 8000)
