@@ -145,7 +145,8 @@ def test_empty_manomatika_namespace_is_valid():
     assert lint_error_codes(raw) == []
 
 
-def test_multiple_facilities_each_contiguous():
+def test_multiple_facilities_with_gaps_lint_clean():
+    """Several facilities coexist and each may carry gaps (CFG skips 002)."""
     text = _valid_matika("""\
         - code: MATIKA-LNCH-001
           severity: error
@@ -155,7 +156,7 @@ def test_multiple_facilities_each_contiguous():
           severity: warning
           log_route: aggregate
           message: b
-        - code: MATIKA-CFG-002
+        - code: MATIKA-CFG-003
           severity: error
           log_route: aggregate
           message: c
@@ -194,31 +195,36 @@ def test_lint_rejects_duplicate_code():
     assert any("duplicate code" in f for f in findings)
 
 
-def test_lint_rejects_nnn_gap():
-    """001 then 003 (missing 002) is a contiguity violation."""
+def test_lint_allows_nnn_gap():
+    """Gaps are allowed: NNN is opaque and MONOTONIC (reserved/retired/skipped
+    numbers are expected), so 001, 002, 004 (missing 003) lints CLEAN. This is
+    the relaxed contract — the old rule flagged this as 'not contiguous'."""
     text = _valid_matika("""\
         - code: MATIKA-LNCH-001
           severity: error
           log_route: startup
           message: a
-        - code: MATIKA-LNCH-003
+        - code: MATIKA-LNCH-002
           severity: error
           log_route: startup
           message: b
+        - code: MATIKA-LNCH-004
+          severity: error
+          log_route: startup
+          message: c
     """)
-    findings = _lint(text)
-    assert any("not contiguous" in f for f in findings)
+    assert _lint(text) == []
 
 
-def test_lint_rejects_nnn_not_starting_at_001():
+def test_lint_allows_nnn_not_starting_at_001():
+    """A facility need not start at 001 — reserved low numbers are allowed."""
     text = _valid_matika("""\
         - code: MATIKA-LNCH-002
           severity: error
           log_route: startup
           message: a
     """)
-    findings = _lint(text)
-    assert any("not contiguous" in f for f in findings)
+    assert _lint(text) == []
 
 
 def test_lint_rejects_wrong_component_prefix():
@@ -334,12 +340,17 @@ def test_load_error_codes_valid(tmp_path):
 
 
 def test_load_error_codes_raises_on_invalid(tmp_path):
+    # A DUPLICATE code is still a defect under the relaxed (uniqueness-only) rule.
     bad = tmp_path / "bad.yaml"
     bad.write_text(_valid_matika("""\
-        - code: MATIKA-LNCH-002
+        - code: MATIKA-LNCH-001
           severity: error
           log_route: startup
           message: a
+        - code: MATIKA-LNCH-001
+          severity: error
+          log_route: startup
+          message: b
     """))
     with pytest.raises(ValueError, match="is invalid"):
         load_error_codes(bad)
@@ -453,10 +464,14 @@ def test_gen_script_refuses_invalid_source(tmp_path):
     """scripts/gen_error_codes.py fails loud (exit 1) on a malformed registry."""
     bad = tmp_path / "bad.yaml"
     bad.write_text(_valid_matika("""\
-        - code: MATIKA-LNCH-003
+        - code: MATIKA-LNCH-001
           severity: error
           log_route: startup
           message: a
+        - code: MATIKA-LNCH-001
+          severity: error
+          log_route: startup
+          message: b
     """))
     script = Path(__file__).parent.parent / "scripts" / "gen_error_codes.py"
     result = subprocess.run(

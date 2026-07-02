@@ -30,6 +30,7 @@
     "AHIMSA-RESOLVE-006": "unexpected applug manifest resolution failure",
     "AHIMSA-RESOLVE-007": "resolved applug id does not match the recipe name",
     "AHIMSA-RESOLVE-008": "resolved applug version does not match the recipe version",
-    "AHIMSA-RESOLVE-009": "resolved applug matika_version does not match the recipe matika_version"
+    "AHIMSA-RESOLVE-009": "resolved applug matika_version does not match the recipe matika_version",
+    "AHIMSA-RESOLVE-010": "applug declares a supported locale that matika does not support"
   }
 }

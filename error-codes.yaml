@@ -7,12 +7,15 @@
 # record. ahimsa is also the English-only carve-out (with the launcher and
 # ahimsa's own logs): supported_locales is [en] ONLY, no es catalog.
 #
-# Facilities (7), each contiguous from 001, 31 codes total:
+# Facilities (7), 32 codes total. NNN values are opaque and MONOTONIC — gaps
+# (reserved / retired / skipped numbers) are allowed by the mechanism; ahimsa
+# simply numbers each facility contiguously from 001 today as a housekeeping
+# convention, not because the lint requires it.
 #   RECIPE  (4) — recipe.json top-level structural checks
 #   APP     (4) — recipe.json "application" object checks
 #   MATIKA  (2) — recipe.json "matika" object checks
 #   PLUG    (3) — recipe.json "applugs[]" object checks
-#   RESOLVE (9) — remote applug.json resolution + cross-check against the recipe
+#   RESOLVE (10) — remote applug.json resolution + cross-check against the recipe
 #   RELEASE (7) — RELEASES.md / release-log.yaml audit (validate_releases.py)
 #   CLI     (2) — ahimsa-validate / ahimsa-validate-releases --config failures
 #
@@ -120,6 +123,10 @@ codes:
     severity: error
     log_route: n/a
     message: resolved applug matika_version does not match the recipe matika_version
+  - code: AHIMSA-RESOLVE-010
+    severity: error
+    log_route: n/a
+    message: applug declares a supported locale that matika does not support
 
   # --- RELEASE: RELEASES.md / release-log.yaml audit ---------------------
   - code: AHIMSA-RELEASE-001
