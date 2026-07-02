@@ -8,7 +8,7 @@
   in mm to fetch the recipe from — for cross-repo validation builds; default `""`).
   The `push: tags: v*` trigger and the `release` job have been removed; ahimsa
   builds artifacts on demand, never creates GitHub releases. Jobs:
-  - `validate` → fetches recipe from `manomatika/manomatika` (using a minted App token, `permission-contents: write`), installs ahimsa via `pip install uv` → `uv sync --frozen`, runs `uv run ahimsa-validate "$RECIPE_PATH"` (fail fast).
+  - `validate` → fetches recipe from `manomatika/manomatika` (using a minted App token, `permission-contents: write`), installs ahimsa via `pip install uv` → `uv sync --frozen`, runs `uv run ahimsa-validate "$RECIPE_PATH"` (fail fast). It then runs the **BLOCKING cross-repo error-code aggregator** (manomatika/ahimsa#129, R6): `scripts/fetch_error_codes_sources.py` resolves the four SHA-pinned per-origin `error-codes.yaml` the recipe names (matika, each applug, manomatika, this ahimsa checkout) and feeds them to `ahimsa-aggregate-error-codes --require-all-origins` — a registry-parity violation (dup / prefix drift / missing-origin) fails this job (X) and blocks every downstream platform build.
   - `build-macos-arm` (**macos-14**), `build-macos-intel` (**macos-15-intel** —
     `macos-13` was retired), `build-windows` (**windows-latest**) — all
     `needs: validate`, run in parallel. **Fully implemented, not stubbed.** Each job:

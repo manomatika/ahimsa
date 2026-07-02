@@ -41,6 +41,30 @@ CLAUDE.md must never knowingly contain stale information. Whenever CLAUDE.md is 
 - **Escaped-bug regression mandate (standing rule 22).** Any bug that reaches CI, an rc, or install/runtime testing without being caught by the suite MUST, as part of its fix, gain a regression test that would have caught it — added at the layer where it escaped (unit/integration for logic gaps; a feature/E2E check against the FROZEN, pinned artifact for product-behavior gaps). The fix is not done until that test exists, fails without the fix, and passes with it. Product-behavior regressions must be exercised against the frozen artifact on BOTH install paths (fresh install AND upgrade over a prior install), since the upgrade path is where the stale-plugin regression escaped.
 - **Never weaken or disable security / correctness checks** (CSRF, permission, auth, validation) as a workaround. If a check is producing a wrong answer, fix the call site to satisfy it correctly — never bypass.
 
+### Error-code framework
+
+- **Per-origin `error-codes.yaml`, one per origin.** Each of the four origins
+  declares its own codes in its own file: matika at
+  `src/matika/error/error-codes.yaml`, each applug at
+  `src/<name>/error/error-codes.yaml`, manomatika (this org's product-authority
+  repo) at `error/error-codes.yaml`, and ahimsa at its repo-root
+  `error-codes.yaml`. A file with `codes: []` is a well-formed, reserved
+  namespace — an empty registry is not a defect.
+- **ahimsa owns the mechanism, not the codes.** ahimsa's `ahimsa/error_codes.py`
+  defines the schema, the per-file lints, the cross-repo aggregator, and
+  codegen; it owns no origin's codes and no repo's registry content.
+- **The cross-repo aggregator is BLOCKING (registry parity).** At gate time,
+  ahimsa resolves the four SHA-pinned per-origin files the recipe names and
+  runs `ahimsa-aggregate-error-codes --require-all-origins` over them: it
+  enforces cross-file code uniqueness, component-prefix disjointness, and that
+  every expected origin actually contributed a file. Any finding fails the
+  gate (V/X) — no report-only mode remains (flipped to blocking in R6,
+  manomatika/ahimsa#129).
+- **Codes are asserted, not prose.** Tests and call sites reference the typed,
+  codegen'd constant (e.g. `MATIKA_LNCH_001`), never the free-text `message`
+  string — the code is the single stable carrier; message text may change
+  without breaking a caller.
+
 ### Repository ecosystem
 
 - **manomatika** is the GitHub org. The shipped PRODUCT is **ManoMatika** — a pinned *triple* of component versions (matika + eyerate + ahimsa), blessed by a single product release. The repos:
